@@ -70,6 +70,8 @@ class CodingAgent:
             self.messages = list(self.session.messages)
             self.tools.todos = list(self.session.todos)
             self.tools.task_graph = list(self.session.task_graph)
+            if self.tools.subagent_runner is not None:
+                self.tools.subagent_runner.import_tasks(self.session.subagent_tasks)
             start_step = self.session.step
             task = self.session.task
             self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
@@ -213,6 +215,11 @@ class CodingAgent:
         self.session.messages = list(self.messages)
         self.session.todos = list(self.tools.todos)
         self.session.task_graph = list(self.tools.task_graph)
+        self.session.subagent_tasks = (
+            self.tools.subagent_runner.export_tasks()
+            if self.tools.subagent_runner is not None
+            else []
+        )
         if stopped_by:
             self.session.status = "finished" if stopped_by == "finished" else "stopped"
             self.session.stopped_by = stopped_by

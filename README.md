@@ -25,6 +25,12 @@ ninecoder \
   "Make divide raise ValueError('division by zero') when b is zero, then run tests"
 ```
 
+Resume an unfinished run:
+
+```bash
+ninecoder --workspace demo_workspace --resume-session 20260831-120000-000000
+```
+
 Run local tests:
 
 ```bash
@@ -49,10 +55,11 @@ permission mode can be `plan`, `ask`, or `auto`.
 - Tool registry with JSON schema definitions
 - Tools: bash, read, write, edit, glob/list, grep/search, todo, finish
 - On-demand markdown skill loading
-- Lightweight read-only subagent calls
+- Read-only subagent tasks with ids, status, independent context, and saved results
 - Simple task graph with dependencies
-- Context compaction by recent-window retention and tool-output truncation
+- Resumable session state with messages, todos, task graph, subagent tasks, and status
+- Context compaction by recent-window retention, summary files, and stored long tool outputs
 - JSONL trajectory persistence
 - MCP-like local capability router with `tools/list` and `tools/call`
-- Hook points around tool execution and finish
+- Hook points that can inspect or rewrite model requests, model responses, tool calls, tool results, and finish events
 - Permission governance with `plan`, `ask`, and `auto`

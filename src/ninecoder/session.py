@@ -30,6 +30,7 @@ class SessionState:
     messages: list[dict[str, Any]] = field(default_factory=list)
     todos: list[dict[str, str]] = field(default_factory=list)
     task_graph: list[dict[str, Any]] = field(default_factory=list)
+    subagent_tasks: list[dict[str, Any]] = field(default_factory=list)
 
 
 class SessionStore:

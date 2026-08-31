@@ -23,6 +23,9 @@ READ_ONLY_TOOLS = {
     "search",
     "load_skill",
     "spawn_subagent",
+    "start_subagent_task",
+    "read_subagent_task",
+    "list_subagent_tasks",
     "update_todo",
     "update_task_graph",
 }
