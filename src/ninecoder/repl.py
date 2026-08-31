@@ -13,6 +13,7 @@ REPL_HELP = """\
 Commands:
   <message>       Continue the current conversation
   /new            Start a brand-new conversation
+  /resume [id]    Resume an existing session (pick one when id is omitted)
   /switch <id>    Branch from an existing session on your next message
   /compact        Compact the current conversation context
   /tree           Show the conversation tree
@@ -35,6 +36,8 @@ def parse_command(text: str) -> tuple[str, str] | None:
     arg = arg.strip()
     if verb == "/new":
         return ("new", arg)
+    if verb == "/resume":
+        return ("resume", arg)
     if verb in ("/switch", "/checkout"):
         return ("switch", arg)
     if verb == "/compact":

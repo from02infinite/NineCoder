@@ -31,6 +31,16 @@ Resume an unfinished run:
 ninecoder --workspace demo_workspace --resume 20260831-120000-000000
 ```
 
+In the interactive REPL, choose an old session and continue it:
+
+```text
+/resume
+```
+
+Rich TUI mode opens a keyboard picker: use Up/Down to choose a saved session,
+then press Enter. Use `/resume <id>` to jump directly, or `/switch <id>` when
+you want to branch a new session from old context instead of continuing it.
+
 Print a script-friendly final report:
 
 ```bash

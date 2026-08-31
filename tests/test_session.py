@@ -31,6 +31,21 @@ class ResumeModel:
         )
 
 
+class RecordingFinishModel:
+    def __init__(self) -> None:
+        self.user_messages: list[str] = []
+
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        self.user_messages = [
+            str(message.get("content", "")) for message in messages if message["role"] == "user"
+        ]
+        return ModelResponse("done", [ToolCall("call_1", "finish", {"summary": "ok"})])
+
+
 class SubagentTaskModel:
     def __init__(self) -> None:
         self.agent_calls = 0
@@ -101,6 +116,44 @@ class SessionTest(unittest.TestCase):
 
             self.assertEqual(result.session_id, "saved-session")
             self.assertEqual((root / "resumed.txt").read_text(encoding="utf-8"), "yes")
+
+    def test_agent_can_open_saved_session_and_continue_same_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = SessionStore(root / "runs" / "sessions")
+            store.create(
+                "resume task",
+                tmp,
+                PermissionMode.AUTO.value,
+                [
+                    {"role": "system", "content": "system"},
+                    {"role": "user", "content": "first turn"},
+                ],
+                session_id="saved-session",
+            )
+            model = RecordingFinishModel()
+            agent = CodingAgent(
+                model,
+                Workspace(root),
+                AgentConfig(
+                    max_steps=1,
+                    permission_mode=PermissionMode.AUTO,
+                    resume_session="saved-session",
+                    memory=False,
+                ),
+            )
+
+            opened = agent.open_session()
+            result = agent.continue_turn("second turn")
+
+            self.assertEqual(opened.id, "saved-session")
+            self.assertEqual(result.session_id, "saved-session")
+            self.assertIn("second turn", model.user_messages)
+            state = store.load("saved-session")
+            user_messages = [
+                message["content"] for message in state.messages if message["role"] == "user"
+            ]
+            self.assertIn("second turn", user_messages)
 
     def test_agent_persists_subagent_tasks_in_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -311,6 +311,20 @@ def _run_repl(
                 if verb == "help":
                     ui.info(REPL_HELP)
                     continue
+                if verb == "resume":
+                    sessions = _list_sessions(workspace)
+                    target = _resolve_session(sessions, arg) if arg else ui.select_session(
+                        sessions, head_id
+                    )
+                    if target is None:
+                        ui.info("No session selected. Try /list or /resume <id>.")
+                        continue
+                    agent = _build_agent(ui, model_config, workspace, args, target)
+                    session = agent.open_session()
+                    head_id = session.id
+                    fork_from = ""
+                    ui.info(f"Resumed session {session.id}. Continue with your next message.")
+                    continue
                 if verb == "compact":
                     if agent is None or agent.session is None:
                         ui.info("No active conversation to compact.")

@@ -85,6 +85,25 @@ class CodingAgent:
         self._start(task)
         return self._loop()
 
+    def open_session(self) -> SessionState:
+        """Load ``config.resume_session`` without running a model turn."""
+        if not self.config.resume_session:
+            raise RuntimeError("no resume session configured")
+        self.session = self.session_store.load(self.config.resume_session)
+        self.messages = list(self.session.messages)
+        self.tools.todos = list(self.session.todos)
+        self.tools.task_graph = list(self.session.task_graph)
+        if self.tools.subagent_runner is not None:
+            self.tools.subagent_runner.import_tasks(self.session.subagent_tasks)
+        self.context_manager = ContextManager(
+            self.workspace.root,
+            self.config.runs_dir,
+            self.session.id,
+            model=self.model,
+        )
+        self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
+        return self.session
+
     def continue_turn(self, text: str) -> AgentRun:
         """Continue the active session with a new user message."""
         if self.session is None:
@@ -143,14 +162,8 @@ class CodingAgent:
 
     def _start(self, task: str) -> None:
         if self.config.resume_session:
-            self.session = self.session_store.load(self.config.resume_session)
-            self.messages = list(self.session.messages)
-            self.tools.todos = list(self.session.todos)
-            self.tools.task_graph = list(self.session.task_graph)
-            if self.tools.subagent_runner is not None:
-                self.tools.subagent_runner.import_tasks(self.session.subagent_tasks)
+            self.open_session()
             task = self.session.task
-            self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
         else:
             system_content = SYSTEM_PROMPT
             if self.config.memory:
@@ -173,12 +186,12 @@ class CodingAgent:
                 self.messages,
             )
             self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
-        self.context_manager = ContextManager(
-            self.workspace.root,
-            self.config.runs_dir,
-            self.session.id,
-            model=self.model,
-        )
+            self.context_manager = ContextManager(
+                self.workspace.root,
+                self.config.runs_dir,
+                self.session.id,
+                model=self.model,
+            )
         self.trajectory.write(
             "run_start",
             {

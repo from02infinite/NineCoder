@@ -25,6 +25,7 @@ from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.shortcuts import radiolist_dialog
 from prompt_toolkit.styles import Style
 
 from ninecoder.ui.base import AgentUI, UiContext
@@ -174,6 +175,26 @@ class RichUI(AgentUI):
             self.console.print(Text(f"✗ {line}", style="red"))
 
     # -- interactive input -------------------------------------------------
+    def select_session(self, sessions: list[Any], head_id: str = "") -> str | None:
+        if not sessions:
+            return None
+        values = [
+            (
+                str(getattr(session, "id", "")),
+                _session_label(session, head_id),
+            )
+            for session in sessions
+        ]
+        try:
+            selected = radiolist_dialog(
+                title="Resume session",
+                text="Choose a saved session, then press Enter.",
+                values=values,
+            ).run()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        return str(selected) if selected else None
+
     def prompt_input(self) -> str | None:
         while True:
             try:
@@ -197,3 +218,13 @@ class RichUI(AgentUI):
 
     def shutdown(self) -> None:
         return None
+
+
+def _session_label(session: Any, head_id: str) -> str:
+    session_id = str(getattr(session, "id", ""))
+    status = str(getattr(session, "status", "") or "unknown")
+    task = str(getattr(session, "task", "") or "(no task)").replace("\n", " ").strip()
+    if len(task) > 52:
+        task = f"{task[:49]}..."
+    marker = "* " if session_id == head_id else ""
+    return f"{marker}{session_id}  {status:8}  {task}"

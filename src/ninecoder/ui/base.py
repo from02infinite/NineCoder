@@ -97,6 +97,30 @@ class AgentUI:
         """A user-visible error."""
 
     # -- interactive input -------------------------------------------------
+    def select_session(self, sessions: list[Any], head_id: str = "") -> str | None:
+        """Let the user choose a saved session id."""
+        if not sessions:
+            return None
+        for index, session in enumerate(sessions, 1):
+            marker = "* " if getattr(session, "id", "") == head_id else "  "
+            task = str(getattr(session, "task", "") or "(no task)").replace("\n", " ")
+            print(f"{marker}{index}. {getattr(session, 'id', '')}  {task}")
+        try:
+            reply = input("Resume session number or id: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if not reply:
+            return None
+        if reply.isdigit():
+            index = int(reply) - 1
+            if 0 <= index < len(sessions):
+                return str(getattr(sessions[index], "id", ""))
+        for session in sessions:
+            session_id = str(getattr(session, "id", ""))
+            if session_id == reply:
+                return session_id
+        return None
+
     def prompt_input(self) -> str | None:
         """Read the next user message. Returns None on EOF (Ctrl-D)."""
         try:
