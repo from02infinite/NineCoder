@@ -16,7 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="ninecoder",
         description="Run the NineCoder local coding agent.",
     )
-    parser.add_argument("task", nargs="+", help="Natural-language coding task")
+    parser.add_argument("task", nargs="*", help="Natural-language coding task")
     parser.add_argument("-w", "--workspace", default=".", help="Workspace directory")
     parser.add_argument("-m", "--model", default=None, help="Model name")
     parser.add_argument("--base-url", default=None, help="OpenAI-compatible API base URL")
@@ -27,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Permission mode for mutating tools",
     )
     parser.add_argument("--max-steps", type=int, default=30, help="Maximum agent loop steps")
+    parser.add_argument("--resume-session", default="", help="Resume a saved session id")
     parser.add_argument("--test-cmd", default="", help="Verification command to run before finish")
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--max-tokens", type=int, default=4096)
@@ -36,6 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if not args.task and not args.resume_session:
+        parser.error("task is required unless --resume-session is provided")
     try:
         model_config = ModelConfig.from_env(
             model=args.model,
@@ -51,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_steps=args.max_steps,
                 permission_mode=PermissionMode(args.permission),
                 test_cmd=args.test_cmd,
+                resume_session=args.resume_session,
             ),
         )
         result = agent.run(" ".join(args.task))
@@ -60,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
     print("\nNineCoder finished")
     print(f"Status: {result.stopped_by}")
     print(f"Steps: {result.steps}")
+    print(f"Session: {result.session_id}")
+    print(f"Session state: {result.session_path}")
     print(f"Trajectory: {result.trajectory_path}")
     print("\nSummary:")
     print(result.summary)

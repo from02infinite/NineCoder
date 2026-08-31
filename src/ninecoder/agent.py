@@ -9,6 +9,7 @@ from ninecoder.hooks import AgentHook, NullHook
 from ninecoder.model_client import ModelResponse
 from ninecoder.permissions import PermissionMode
 from ninecoder.prompts import SYSTEM_PROMPT, no_tool_retry, task_prompt
+from ninecoder.session import SessionState, SessionStore
 from ninecoder.tools import ToolRegistry
 from ninecoder.trajectory import Trajectory
 from ninecoder.workspace import Workspace
@@ -28,6 +29,7 @@ class AgentConfig:
     permission_mode: PermissionMode = PermissionMode.ASK
     test_cmd: str = ""
     runs_dir: str = "runs"
+    resume_session: str = ""
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class AgentRun:
     summary: str
     steps: int
     trajectory_path: Path
+    session_id: str
+    session_path: Path
     stopped_by: str
 
 
@@ -52,26 +56,48 @@ class CodingAgent:
         self.tools = ToolRegistry(workspace, config.permission_mode, model=model)
         self.hooks: list[AgentHook] = hooks or [NullHook()]
         self.messages: list[dict[str, Any]] = []
-        self.trajectory = Trajectory(Path(workspace.root) / config.runs_dir)
+        self.runs_root = Path(workspace.root) / config.runs_dir
+        self.session_store = SessionStore(self.runs_root / "sessions")
+        self.trajectory = Trajectory(self.runs_root)
+        self.session: SessionState | None = None
 
     def run(self, task: str) -> AgentRun:
-        self.messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": task_prompt(task, str(self.workspace.root), self.config.test_cmd),
-            },
-        ]
+        start_step = 0
+        if self.config.resume_session:
+            self.session = self.session_store.load(self.config.resume_session)
+            self.messages = list(self.session.messages)
+            self.tools.todos = list(self.session.todos)
+            self.tools.task_graph = list(self.session.task_graph)
+            start_step = self.session.step
+            task = self.session.task
+            self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
+        else:
+            self.messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": task_prompt(task, str(self.workspace.root), self.config.test_cmd),
+                },
+            ]
+            self.session = self.session_store.create(
+                task,
+                str(self.workspace.root),
+                self.config.permission_mode.value,
+                self.messages,
+            )
+            self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
         self.trajectory.write(
             "run_start",
             {
                 "task": task,
                 "workspace": str(self.workspace.root),
                 "permission_mode": self.config.permission_mode.value,
+                "session_id": self.session.id,
+                "resumed": bool(self.config.resume_session),
             },
         )
         consecutive_format_errors = 0
-        for step in range(1, self.config.max_steps + 1):
+        for step in range(start_step + 1, start_step + self.config.max_steps + 1):
             response = self.model.complete(compact_messages(self.messages), self.tools.schemas())
             assistant_message = {
                 "role": "assistant",
@@ -82,6 +108,7 @@ class CodingAgent:
                     call.to_openai() for call in response.tool_calls
                 ]
             self.messages.append(assistant_message)
+            self._save_session(step)
             self.trajectory.write(
                 "assistant",
                 {
@@ -116,6 +143,7 @@ class CodingAgent:
                     "content": result.content,
                 }
                 self.messages.append(tool_message)
+                self._save_session(step)
                 self.trajectory.write(
                     "tool_result",
                     {
@@ -134,13 +162,40 @@ class CodingAgent:
                     return self._stop(result.content, step, "finished")
         return self._stop(
             f"Reached max_steps={self.config.max_steps} before finish.",
-            self.config.max_steps,
+            start_step + self.config.max_steps,
             "max_steps",
         )
 
     def _stop(self, summary: str, steps: int, stopped_by: str) -> AgentRun:
+        session_path = self._save_session(steps, summary=summary, stopped_by=stopped_by)
         self.trajectory.write(
             "run_end",
             {"summary": summary, "steps": steps, "stopped_by": stopped_by},
         )
-        return AgentRun(summary, steps, self.trajectory.path, stopped_by)
+        return AgentRun(
+            summary,
+            steps,
+            self.trajectory.path,
+            self.session.id if self.session else "",
+            session_path,
+            stopped_by,
+        )
+
+    def _save_session(
+        self,
+        step: int,
+        *,
+        summary: str = "",
+        stopped_by: str = "",
+    ) -> Path:
+        if self.session is None:
+            raise RuntimeError("session is not initialized")
+        self.session.step = step
+        self.session.messages = list(self.messages)
+        self.session.todos = list(self.tools.todos)
+        self.session.task_graph = list(self.tools.task_graph)
+        if stopped_by:
+            self.session.status = "finished" if stopped_by == "finished" else "stopped"
+            self.session.stopped_by = stopped_by
+            self.session.summary = summary
+        return self.session_store.save(self.session)
