@@ -1,41 +1,156 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import traceback
 from pathlib import Path
 
 from ninecoder.agent import AgentConfig, CodingAgent
 from ninecoder.config import ModelConfig
 from ninecoder.model_client import ModelClient
 from ninecoder.permissions import PermissionMode
+from ninecoder.ui import UiContext, make_ui
 from ninecoder.workspace import Workspace
 
 
+EXAMPLES = """examples:
+  ninecoder                       # interactive REPL (on a TTY)
+  ninecoder "Fix the failing tests"
+  ninecoder -w demo --permission auto \\
+    --test "python -m unittest -q" "Make tests pass"
+  ninecoder -w demo --resume 20260831-120000-000000
+  ninecoder --plain "Fix the bug"   # simple print output (CI / pipes)
+  ninecoder --debug "Fix the bug"   # verbose internal logging
+"""
+
+
+class NineCoderHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    pass
+
+
+class NineCoderParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        self.exit(2, f"{self.prog}: error: {message}\nTry '{self.prog} --help'.\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = NineCoderParser(
         prog="ninecoder",
         description="Run the NineCoder local coding agent.",
+        epilog=EXAMPLES,
+        formatter_class=NineCoderHelpFormatter,
     )
-    parser.add_argument("task", nargs="+", help="Natural-language coding task")
-    parser.add_argument("-w", "--workspace", default=".", help="Workspace directory")
-    parser.add_argument("-m", "--model", default=None, help="Model name")
-    parser.add_argument("--base-url", default=None, help="OpenAI-compatible API base URL")
     parser.add_argument(
+        "task",
+        nargs="*",
+        metavar="TASK",
+        help="Natural-language coding task",
+    )
+
+    run_options = parser.add_argument_group("run options")
+    run_options.add_argument(
+        "-w",
+        "--workspace",
+        default=".",
+        help="Workspace directory (default: .)",
+    )
+    run_options.add_argument(
         "--permission",
         choices=[mode.value for mode in PermissionMode],
         default=PermissionMode.ASK.value,
-        help="Permission mode for mutating tools",
+        metavar="MODE",
+        help=(
+            "Tool permission mode: plan blocks writes, ask prompts, "
+            "auto allows workspace changes (default: ask)"
+        ),
     )
-    parser.add_argument("--max-steps", type=int, default=30, help="Maximum agent loop steps")
-    parser.add_argument("--test-cmd", default="", help="Verification command to run before finish")
-    parser.add_argument("--temperature", type=float, default=0.2)
-    parser.add_argument("--max-tokens", type=int, default=4096)
+    run_options.add_argument(
+        "--max-steps",
+        type=int,
+        default=30,
+        help="Maximum agent loop steps (default: 30)",
+    )
+    run_options.add_argument(
+        "--resume",
+        "--resume-session",
+        dest="resume_session",
+        default="",
+        help="Resume a saved session id",
+    )
+    run_options.add_argument(
+        "--test",
+        "--test-cmd",
+        dest="test_cmd",
+        default="",
+        help="Verification command the agent should run before finishing",
+    )
+
+    model_options = parser.add_argument_group("model options")
+    model_options.add_argument(
+        "-m",
+        "--model",
+        default=None,
+        help="Model name (env: NINECODER_MODEL)",
+    )
+    model_options.add_argument(
+        "--base-url",
+        default=None,
+        help="OpenAI-compatible API base URL",
+    )
+    model_options.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature (default: 0.2)",
+    )
+    model_options.add_argument(
+        "--max-tokens",
+        type=int,
+        default=4096,
+        help="Maximum response tokens (default: 4096)",
+    )
+
+    output_options = parser.add_argument_group("output options")
+    output_options.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Hide live progress output",
+    )
+    output_options.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the final report as JSON",
+    )
+    output_options.add_argument(
+        "--debug",
+        action="store_true",
+        help="Show internal debug logging (iterations, timings, decisions)",
+    )
+    output_options.add_argument(
+        "--plain",
+        action="store_true",
+        help="Disable the rich TUI and print plain-text output",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    interactive = _is_interactive()
+    repl_mode = bool(
+        not args.task
+        and not args.resume_session
+        and interactive
+        and not args.json
+        and not args.quiet
+    )
+    if not args.task and not args.resume_session and not repl_mode:
+        parser.error("task is required unless --resume-session is provided")
+
     try:
         model_config = ModelConfig.from_env(
             model=args.model,
@@ -44,26 +159,154 @@ def main(argv: list[str] | None = None) -> int:
             max_tokens=args.max_tokens,
         )
         workspace = Workspace(Path(args.workspace))
-        agent = CodingAgent(
-            ModelClient(model_config),
-            workspace,
-            AgentConfig(
-                max_steps=args.max_steps,
-                permission_mode=PermissionMode(args.permission),
-                test_cmd=args.test_cmd,
-            ),
-        )
-        result = agent.run(" ".join(args.task))
     except Exception as exc:
-        print(f"NineCoder failed: {exc}", file=sys.stderr)
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        else:
+            print(f"Error: {exc}", file=sys.stderr)
         return 1
-    print("\nNineCoder finished")
-    print(f"Status: {result.stopped_by}")
-    print(f"Steps: {result.steps}")
-    print(f"Trajectory: {result.trajectory_path}")
-    print("\nSummary:")
-    print(result.summary)
+
+    ui = _build_ui(args, model_config, workspace, interactive)
+
+    if repl_mode:
+        return _run_repl(ui, model_config, workspace, args)
+
+    ui.session_started(
+        task=" ".join(args.task),
+        resumed=bool(args.resume_session),
+    )
+    try:
+        result = _run_once(ui, model_config, workspace, args)
+    except Exception as exc:
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        else:
+            ui.error(_error_message(args, exc))
+        return 1
+
+    if args.json:
+        print(json.dumps(final_report(result, workspace), ensure_ascii=False, indent=2))
+    else:
+        print_human_report(result, workspace)
+    ui.shutdown()
     return 0 if result.stopped_by == "finished" else 1
+
+
+def _is_interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty() and sys.stderr.isatty()
+
+
+def _build_ui(
+    args: argparse.Namespace,
+    model_config: ModelConfig,
+    workspace: Workspace,
+    interactive: bool,
+) -> object:
+    if args.json or args.quiet:
+        mode = "null"
+    elif args.plain or not interactive:
+        mode = "plain"
+    else:
+        mode = "rich"
+    context = UiContext(
+        model=model_config.model,
+        workspace=str(workspace.root),
+        permission=args.permission,
+        test_cmd=args.test_cmd,
+        debug=bool(args.debug),
+    )
+    return make_ui(mode=mode, context=context)
+
+
+def _run_once(
+    ui: object,
+    model_config: ModelConfig,
+    workspace: Workspace,
+    args: argparse.Namespace,
+    *,
+    task: str | None = None,
+    resume_session: str | None = None,
+) -> object:
+    if resume_session is None:
+        resume_session = args.resume_session
+    agent = CodingAgent(
+        ModelClient(model_config),
+        workspace,
+        AgentConfig(
+            max_steps=args.max_steps,
+            permission_mode=PermissionMode(args.permission),
+            test_cmd=args.test_cmd,
+            resume_session=resume_session,
+        ),
+        ui=ui,
+    )
+    return agent.run(task if task is not None else " ".join(args.task))
+
+
+def _run_repl(
+    ui: object,
+    model_config: ModelConfig,
+    workspace: Workspace,
+    args: argparse.Namespace,
+) -> int:
+    ui.session_started()
+    try:
+        while True:
+            text = ui.prompt_input()
+            if text is None:
+                break
+            text = text.strip()
+            if not text:
+                continue
+            if text in ("exit", "quit", "/exit", "/quit"):
+                break
+            try:
+                _run_once(ui, model_config, workspace, args, task=text, resume_session="")
+            except KeyboardInterrupt:
+                ui.error("Interrupted")
+            except Exception as exc:
+                ui.error(_error_message(args, exc))
+    finally:
+        ui.shutdown()
+    return 0
+
+
+def _error_message(args: argparse.Namespace, exc: BaseException) -> str:
+    if getattr(args, "debug", False):
+        return traceback.format_exc()
+    return str(exc)
+
+
+def print_human_report(result: object, workspace: Workspace) -> None:
+    report = final_report(result, workspace)
+    title = "Done" if report["status"] == "finished" else f"Stopped: {report['status']}"
+    print(f"\n{title}")
+    print(report["summary"] or "(no summary)")
+    print("")
+    print(f"Steps: {report['steps']}")
+    print(f"Session: {report['session_id']}")
+    print(f"Session state: {report['session_path']}")
+    print(f"Trajectory: {report['trajectory_path']}")
+
+
+def final_report(result: object, workspace: Workspace) -> dict[str, object]:
+    return {
+        "ok": getattr(result, "stopped_by") == "finished",
+        "status": getattr(result, "stopped_by"),
+        "summary": str(getattr(result, "summary", "")).strip(),
+        "steps": getattr(result, "steps"),
+        "session_id": getattr(result, "session_id"),
+        "session_path": display_path(getattr(result, "session_path"), workspace),
+        "trajectory_path": display_path(getattr(result, "trajectory_path"), workspace),
+    }
+
+
+def display_path(path: object, workspace: Workspace) -> str:
+    candidate = Path(path)
+    try:
+        return str(candidate.resolve(strict=False).relative_to(workspace.root))
+    except ValueError:
+        return str(candidate)
 
 
 if __name__ == "__main__":

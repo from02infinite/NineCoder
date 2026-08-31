@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -50,6 +51,25 @@ class SkillAndSubagentTest(unittest.TestCase):
             )
 
             self.assertEqual(result.content, "subagent advice")
+
+    def test_subagent_task_can_be_started_read_and_listed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = ToolRegistry(
+                Workspace(tmp),
+                PermissionMode.AUTO,
+                model=TextModel(),
+            )
+
+            started = registry.execute(
+                "start_subagent_task",
+                {"role": "planner", "prompt": "plan"},
+            )
+            listed = registry.execute("list_subagent_tasks", {})
+            read = registry.execute("read_subagent_task", {"task_id": started.metadata["task_id"]})
+
+            self.assertEqual(json.loads(started.content)["status"], "completed")
+            self.assertEqual(json.loads(read.content)["result"], "subagent advice")
+            self.assertEqual(json.loads(listed.content)[0]["id"], started.metadata["task_id"])
 
 
 if __name__ == "__main__":

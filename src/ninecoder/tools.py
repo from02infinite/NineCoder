@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from ninecoder.errors import PermissionDenied
 from ninecoder.permissions import Decision, PermissionMode, evaluate_permission
 from ninecoder.skills import SkillLibrary
-from ninecoder.subagents import ask_subagent
+from ninecoder.subagents import SubagentTaskRunner
 from ninecoder.workspace import Workspace
+
+if TYPE_CHECKING:
+    from ninecoder.ui.base import AgentUI
 
 
 @dataclass(frozen=True)
@@ -45,11 +48,16 @@ class ToolRegistry:
         *,
         model: Any | None = None,
         skill_library: SkillLibrary | None = None,
+        ui: "AgentUI | None" = None,
     ):
+        from ninecoder.ui.base import AgentUI
+
         self.workspace = workspace
         self.mode = mode
         self.model = model
+        self.ui = ui if ui is not None else AgentUI()
         self.skill_library = skill_library or SkillLibrary()
+        self.subagent_runner = SubagentTaskRunner(model) if model is not None else None
         self.todos: list[dict[str, str]] = []
         self.task_graph: list[dict[str, Any]] = []
         self._tools: dict[str, Tool] = {}
@@ -73,6 +81,10 @@ class ToolRegistry:
         if validation_error:
             return ToolResult(f"Invalid arguments for {name}: {validation_error}", is_error=True)
         permission = evaluate_permission(self.mode, name, self._target_argument(arguments))
+        self.ui.debug(
+            f"permission {permission.decision.value} for {name}"
+            + (f" ({permission.reason})" if permission.reason else "")
+        )
         if permission.decision is Decision.DENY:
             return ToolResult(f"Permission denied: {permission.reason}", is_error=True)
         if permission.decision is Decision.ASK and not self._confirm(name, arguments, permission.reason):
@@ -257,7 +269,7 @@ class ToolRegistry:
         self._register(
             Tool(
                 "spawn_subagent",
-                "Ask a lightweight read-only subagent for planning or review advice.",
+                "Ask a lightweight read-only subagent and return its completed result.",
                 object_schema(
                     {
                         "role": string("Subagent role, such as planner or reviewer"),
@@ -267,6 +279,37 @@ class ToolRegistry:
                     required=["role", "prompt"],
                 ),
                 self._spawn_subagent,
+            )
+        )
+        self._register(
+            Tool(
+                "start_subagent_task",
+                "Run a read-only subagent (synchronously) and save its completed result as a task record for later reading.",
+                object_schema(
+                    {
+                        "role": string("Subagent role, such as planner or reviewer"),
+                        "prompt": string("Question or task for the subagent"),
+                        "context": string("Optional compact context for the subagent"),
+                    },
+                    required=["role", "prompt"],
+                ),
+                self._start_subagent_task,
+            )
+        )
+        self._register(
+            Tool(
+                "read_subagent_task",
+                "Read a saved, already-completed subagent task by id.",
+                object_schema({"task_id": string("Subagent task id")}, required=["task_id"]),
+                self._read_subagent_task,
+            )
+        )
+        self._register(
+            Tool(
+                "list_subagent_tasks",
+                "List saved subagent tasks and their statuses.",
+                object_schema({}),
+                self._list_subagent_tasks,
             )
         )
         self._register(
@@ -325,15 +368,58 @@ class ToolRegistry:
         )
 
     def _spawn_subagent(self, args: dict[str, Any]) -> ToolResult:
-        if self.model is None:
+        if self.subagent_runner is None:
             return ToolResult("No model is attached for subagent calls.", is_error=True)
-        answer = ask_subagent(
-            self.model,
+        task = self.subagent_runner.start(
             args["role"],
             args["prompt"],
             args.get("context", ""),
         )
-        return ToolResult(answer, metadata={"role": args["role"]})
+        return ToolResult(
+            task.result if task.status != "failed" else f"subagent failed: {task.error}",
+            metadata={"role": args["role"], "task_id": task.id, "status": task.status},
+            is_error=task.status == "failed",
+        )
+
+    def _start_subagent_task(self, args: dict[str, Any]) -> ToolResult:
+        if self.subagent_runner is None:
+            return ToolResult("No model is attached for subagent calls.", is_error=True)
+        task = self.subagent_runner.start(
+            args["role"],
+            args["prompt"],
+            args.get("context", ""),
+        )
+        return ToolResult(
+            json.dumps(task.to_dict(), ensure_ascii=False, indent=2),
+            metadata={"task_id": task.id, "status": task.status},
+            is_error=task.status == "failed",
+        )
+
+    def _read_subagent_task(self, args: dict[str, Any]) -> ToolResult:
+        if self.subagent_runner is None:
+            return ToolResult("No subagent task runner is available.", is_error=True)
+        task = self.subagent_runner.get(args["task_id"])
+        if task is None:
+            return ToolResult(f"Unknown subagent task: {args['task_id']}", is_error=True)
+        return ToolResult(
+            json.dumps(task.to_dict(), ensure_ascii=False, indent=2),
+            metadata={"task_id": task.id, "status": task.status},
+            is_error=task.status == "failed",
+        )
+
+    def _list_subagent_tasks(self, args: dict[str, Any]) -> ToolResult:
+        if self.subagent_runner is None:
+            return ToolResult("No subagent task runner is available.", is_error=True)
+        tasks = [
+            {
+                "id": task.id,
+                "role": task.role,
+                "status": task.status,
+                "updated_at": task.updated_at,
+            }
+            for task in self.subagent_runner.list()
+        ]
+        return ToolResult(json.dumps(tasks, ensure_ascii=False, indent=2))
 
     def _target_argument(self, arguments: dict[str, Any]) -> str:
         for key in ("path", "file_path", "target", "command"):
@@ -343,10 +429,7 @@ class ToolRegistry:
         return ""
 
     def _confirm(self, name: str, arguments: dict[str, Any], reason: str) -> bool:
-        print(f"\nPermission required: {name} ({reason})")
-        print(json.dumps(arguments, ensure_ascii=False, indent=2))
-        reply = input("Allow once? [y/N] ").strip().lower()
-        return reply in {"y", "yes"}
+        return self.ui.permission_requested(name, arguments, reason)
 
 
 def string(description: str, default: str | None = None) -> dict[str, Any]:

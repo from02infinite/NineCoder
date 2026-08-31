@@ -9,7 +9,10 @@ description = "A lightweight self-built coding agent for local software tasks."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "NineCoder" }]
-dependencies = []
+dependencies = [
+    "rich>=13.0",
+    "prompt_toolkit>=3.0",
+]
 
 [project.scripts]
 ninecoder = "ninecoder.cli:main"

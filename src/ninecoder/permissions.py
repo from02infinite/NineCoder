@@ -23,20 +23,29 @@ READ_ONLY_TOOLS = {
     "search",
     "load_skill",
     "spawn_subagent",
+    "start_subagent_task",
+    "read_subagent_task",
+    "list_subagent_tasks",
     "update_todo",
     "update_task_graph",
 }
 MUTATING_TOOLS = {"edit_file", "write_file", "run_shell"}
 
 SENSITIVE_NAMES = {
-    ".env",
     ".netrc",
     ".npmrc",
     ".pypirc",
     ".git-credentials",
+    ".pgpass",
     "id_rsa",
     "id_ed25519",
+    "id_ecdsa",
+    "id_dsa",
 }
+
+# Match these names and any dotted variant, e.g. ``.env``, ``.env.local``,
+# ``.env.production``, ``.env.backup``.
+SENSITIVE_NAME_PREFIXES = {".env"}
 
 SENSITIVE_PARTS = {".ssh", ".aws", ".gnupg", ".kube", ".docker"}
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
@@ -55,6 +64,11 @@ def hits_sensitive_path(path: str | Path) -> bool:
         return True
     filename = candidate.name.lower()
     if filename in SENSITIVE_NAMES:
+        return True
+    if any(
+        filename == prefix or filename.startswith(prefix + ".")
+        for prefix in SENSITIVE_NAME_PREFIXES
+    ):
         return True
     return any(filename.endswith(suffix) for suffix in SENSITIVE_SUFFIXES)
 
