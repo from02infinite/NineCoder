@@ -40,6 +40,7 @@ class AgentConfig:
     resume_session: str = ""
     memory: bool = True
     memory_file: str = "MEMORY.md"
+    context_window_tokens: int = 32000
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,7 @@ class CodingAgent:
             self.workspace.root,
             self.config.runs_dir,
             self.session.id,
+            max_context_tokens=self.config.context_window_tokens,
             model=self.model,
         )
         self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
@@ -143,6 +145,7 @@ class CodingAgent:
             self.workspace.root,
             self.config.runs_dir,
             self.session.id,
+            max_context_tokens=self.config.context_window_tokens,
             model=self.model,
         )
         self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
@@ -192,6 +195,7 @@ class CodingAgent:
                 self.workspace.root,
                 self.config.runs_dir,
                 self.session.id,
+                max_context_tokens=self.config.context_window_tokens,
                 model=self.model,
             )
         self.trajectory.write(
@@ -224,6 +228,8 @@ class CodingAgent:
             response = self.model.complete(model_request.messages, model_request.tools)
             elapsed = time.perf_counter() - model_started_at
             response = self._after_model(response)
+            if self.context_manager is not None:
+                self.context_manager.record_usage(model_request.messages, response.usage)
             self.ui.model_finished(elapsed, response.finish_reason)
             if response.content and response.content.strip():
                 self.ui.assistant_text(response.content)

@@ -98,6 +98,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="MEMORY.md",
         help="Memory file name in the workspace root (default: MEMORY.md)",
     )
+    run_options.add_argument(
+        "--context-window-tokens",
+        type=int,
+        default=32000,
+        help="Approximate model context window for compaction decisions (default: 32000)",
+    )
 
     model_options = parser.add_argument_group("model options")
     model_options.add_argument(
@@ -259,6 +265,7 @@ def _build_agent(
             resume_session=resume_session,
             memory=not args.no_memory,
             memory_file=args.memory_file,
+            context_window_tokens=args.context_window_tokens,
         ),
         ui=ui,
     )

@@ -5,6 +5,7 @@ from pathlib import Path
 from ninecoder.context import (
     ContextManager,
     compact_messages,
+    estimate_messages_tokens,
     summarize_messages,
     summarize_with_model,
 )
@@ -132,6 +133,22 @@ class ContextManagerTest(unittest.TestCase):
 
         self.assertIn("tool_calls=1", summary)
 
+    def test_token_estimate_uses_chars_per_token_fallback(self) -> None:
+        estimate = estimate_messages_tokens([{"role": "user", "content": "x" * 17}])
+
+        self.assertEqual(estimate, 5)
+
+    def test_usage_calibration_adjusts_future_estimates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = ContextManager(tmp, "runs", "session-1")
+            messages = [{"role": "user", "content": "x" * 100}]
+
+            before = manager.estimate_messages_tokens(messages)
+            manager.record_usage(messages, {"prompt_tokens": 10})
+            after = manager.estimate_messages_tokens(messages)
+
+            self.assertLess(after, before)
+
 
 def _compaction_fixture() -> list[dict]:
     return [
@@ -167,13 +184,14 @@ class ModelSummaryTest(unittest.TestCase):
 
         self.assertIn("Older conversation summary", summary)
 
-    def test_compaction_uses_model_summary(self) -> None:
+    def test_compaction_uses_model_summary_when_token_threshold_is_crossed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manager = ContextManager(
                 tmp,
                 "runs",
                 "session-1",
                 keep_recent_messages=2,
+                max_context_tokens=1,
                 model=_SummarizeModel("condensed facts"),
             )
 

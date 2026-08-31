@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import math
 from pathlib import Path
 import re
 from typing import Any
@@ -13,6 +14,11 @@ MAX_TOOL_CHARS = 8000
 TOOL_INLINE_CHARS = 2400
 KEEP_RECENT_MESSAGES = 18
 SUMMARY_PREVIEW_CHARS = 240
+DEFAULT_MAX_CONTEXT_TOKENS = 32000
+DEFAULT_COMPACTION_RATIO = 0.75
+DEFAULT_CHARS_PER_TOKEN = 4.0
+MIN_CHARS_PER_TOKEN = 1.0
+MAX_CHARS_PER_TOKEN = 8.0
 
 _SUMMARY_SYSTEM = (
     "You condense a coding-agent conversation for context compaction. "
@@ -56,12 +62,17 @@ class ContextManager:
         *,
         keep_recent_messages: int = KEEP_RECENT_MESSAGES,
         max_tool_chars: int = MAX_TOOL_CHARS,
+        max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
+        compaction_ratio: float = DEFAULT_COMPACTION_RATIO,
         model: Any | None = None,
     ):
         self.workspace_root = Path(workspace_root)
         self.root = self.workspace_root / runs_dir / "context" / session_id
         self.keep_recent_messages = keep_recent_messages
         self.max_tool_chars = max_tool_chars
+        self.max_context_tokens = max_context_tokens
+        self.compaction_ratio = compaction_ratio
+        self.chars_per_token = DEFAULT_CHARS_PER_TOKEN
         self.model = model
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -94,7 +105,11 @@ class ContextManager:
         *,
         force: bool = False,
     ) -> list[dict[str, Any]]:
-        if not force and len(messages) <= self.keep_recent_messages + 2:
+        estimated_tokens = self.estimate_messages_tokens(messages)
+        token_threshold = self.compaction_token_threshold
+        should_compact_for_size = estimated_tokens >= token_threshold
+        should_compact_for_count = len(messages) > self.keep_recent_messages + 2
+        if not force and not should_compact_for_size and not should_compact_for_count:
             return [
                 _compact_message(message, self.max_tool_chars)
                 for message in valid_model_messages(messages)
@@ -104,7 +119,10 @@ class ContextManager:
         tail_start = tail_start_for(groups, 1 if force else self.keep_recent_messages)
         omitted = flatten_groups(groups[:tail_start])
         tail = flatten_groups(groups[tail_start:])
-        summary_text = self._summarize(omitted)
+        summary_text = self._summarize(
+            omitted,
+            use_model=force or should_compact_for_size,
+        )
         summary_path = self.root / "summary.md"
         atomic_write_text(summary_path, summary_text + "\n", encoding="utf-8")
         rel_path = summary_path.relative_to(self.workspace_root)
@@ -122,8 +140,30 @@ class ContextManager:
             for message in compacted
         ]
 
-    def _summarize(self, messages: list[dict[str, Any]]) -> str:
-        if self.model is None:
+    @property
+    def compaction_token_threshold(self) -> int:
+        return max(1, int(self.max_context_tokens * self.compaction_ratio))
+
+    def estimate_messages_tokens(self, messages: list[dict[str, Any]]) -> int:
+        return estimate_messages_tokens(messages, chars_per_token=self.chars_per_token)
+
+    def record_usage(
+        self,
+        messages: list[dict[str, Any]],
+        usage: dict[str, Any] | None,
+    ) -> None:
+        prompt_tokens = _prompt_tokens(usage or {})
+        if prompt_tokens <= 0:
+            return
+        chars = message_chars(messages)
+        if chars <= 0:
+            return
+        observed = chars / prompt_tokens
+        observed = min(MAX_CHARS_PER_TOKEN, max(MIN_CHARS_PER_TOKEN, observed))
+        self.chars_per_token = (self.chars_per_token * 3 + observed) / 4
+
+    def _summarize(self, messages: list[dict[str, Any]], *, use_model: bool) -> str:
+        if self.model is None or not use_model:
             return summarize_messages(messages)
         try:
             return summarize_with_model(self.model, messages)
@@ -149,6 +189,37 @@ def summarize_messages(messages: list[dict[str, Any]]) -> str:
             content = content[:SUMMARY_PREVIEW_CHARS] + "..."
         lines.append(f"- {index}. {label}: {content or '(no text)'}")
     return "\n".join(lines)
+
+
+def estimate_messages_tokens(
+    messages: list[dict[str, Any]],
+    *,
+    chars_per_token: float = DEFAULT_CHARS_PER_TOKEN,
+) -> int:
+    chars_per_token = max(MIN_CHARS_PER_TOKEN, chars_per_token)
+    return max(1, math.ceil(message_chars(messages) / chars_per_token))
+
+
+def message_chars(messages: list[dict[str, Any]]) -> int:
+    return sum(len(_message_text(message)) for message in messages)
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    content = message.get("content", "")
+    if not isinstance(content, str):
+        content = str(content)
+    tool_calls = message.get("tool_calls")
+    if tool_calls:
+        content += " " + str(tool_calls)
+    return content
+
+
+def _prompt_tokens(usage: dict[str, Any]) -> int:
+    for key in ("prompt_tokens", "input_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+    return 0
 
 
 def summarize_with_model(model: Any, messages: list[dict[str, Any]]) -> str:
