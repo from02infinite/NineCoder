@@ -66,7 +66,7 @@ class HookPipelineTest(unittest.TestCase):
             CodingAgent(
                 model,
                 Workspace(tmp),
-                AgentConfig(permission_mode=PermissionMode.AUTO),
+                AgentConfig(permission_mode=PermissionMode.AUTO, memory=False),
                 hooks=[AppendModelContextHook()],
             ).run("finish")
 

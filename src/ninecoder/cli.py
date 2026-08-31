@@ -88,6 +88,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Verification command the agent should run before finishing",
     )
+    run_options.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="Disable the cross-run MEMORY.md memory",
+    )
+    run_options.add_argument(
+        "--memory-file",
+        default="MEMORY.md",
+        help="Memory file name in the workspace root (default: MEMORY.md)",
+    )
 
     model_options = parser.add_argument_group("model options")
     model_options.add_argument(
@@ -235,6 +245,8 @@ def _build_agent(
             permission_mode=PermissionMode(args.permission),
             test_cmd=args.test_cmd,
             resume_session=resume_session,
+            memory=not args.no_memory,
+            memory_file=args.memory_file,
         ),
         ui=ui,
     )

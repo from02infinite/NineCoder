@@ -69,7 +69,7 @@ class MultiTurnTest(unittest.TestCase):
             agent = CodingAgent(
                 model,
                 Workspace(tmp),
-                AgentConfig(max_steps=5, permission_mode=PermissionMode.AUTO),
+                AgentConfig(max_steps=5, permission_mode=PermissionMode.AUTO, memory=False),
             )
             agent.run("first task")
             agent.continue_turn("second turn")
@@ -85,7 +85,7 @@ class MultiTurnTest(unittest.TestCase):
             agent = CodingAgent(
                 RecordingFinishModel(),
                 Workspace(tmp),
-                AgentConfig(max_steps=5, permission_mode=PermissionMode.AUTO),
+                AgentConfig(max_steps=5, permission_mode=PermissionMode.AUTO, memory=False),
             )
             result = agent.run("base task")
             parent_id = result.session_id

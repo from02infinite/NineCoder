@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from ninecoder.context import ContextManager, StoredToolOutput, compact_messages
 from ninecoder.hooks import AgentHook, ModelRequest, NullHook, ToolRequest, ToolResponse
+from ninecoder.memory import MemoryStore, extract_facts, memory_block
 from ninecoder.model_client import ModelResponse
 from ninecoder.permissions import PermissionMode
 from ninecoder.prompts import SYSTEM_PROMPT, no_tool_retry, task_prompt
@@ -37,6 +38,8 @@ class AgentConfig:
     test_cmd: str = ""
     runs_dir: str = "runs"
     resume_session: str = ""
+    memory: bool = True
+    memory_file: str = "MEMORY.md"
 
 
 @dataclass(frozen=True)
@@ -139,8 +142,15 @@ class CodingAgent:
             task = self.session.task
             self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
         else:
+            system_content = SYSTEM_PROMPT
+            if self.config.memory:
+                memory = MemoryStore(
+                    self.workspace.root, self.config.memory_file
+                ).read().strip()
+                if memory:
+                    system_content += "\n\n" + memory_block(memory)
             self.messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_content},
                 {
                     "role": "user",
                     "content": task_prompt(task, str(self.workspace.root), self.config.test_cmd),
@@ -281,6 +291,7 @@ class CodingAgent:
     def _stop(self, summary: str, steps: int, stopped_by: str) -> AgentRun:
         self.ui.session_finished(summary=summary, steps=steps, stopped_by=stopped_by)
         session_path = self._save_session(steps, summary=summary, stopped_by=stopped_by)
+        self._remember(summary)
         self.trajectory.write(
             "run_end",
             {"summary": summary, "steps": steps, "stopped_by": stopped_by},
@@ -317,6 +328,24 @@ class CodingAgent:
             self.session.stopped_by = stopped_by
             self.session.summary = summary
         return self.session_store.save(self.session)
+
+    def _remember(self, summary: str) -> None:
+        """Distill the finished run into durable memory. A nicety, not a
+        correctness requirement: any failure here must never break the run."""
+        if not self.config.memory or self.session is None or not summary.strip():
+            return
+        try:
+            facts = extract_facts(self.model, self.session.task, summary).strip()
+        except Exception:
+            return
+        if not facts:
+            return
+        try:
+            MemoryStore(self.workspace.root, self.config.memory_file).append(
+                self.session.task, facts
+            )
+        except OSError:
+            pass
 
     def _model_messages(self) -> list[dict[str, Any]]:
         if self.context_manager is None:
