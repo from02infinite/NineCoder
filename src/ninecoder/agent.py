@@ -94,6 +94,16 @@ class CodingAgent:
         self.ui.user_message(text)
         return self._loop()
 
+    def compact_context(self) -> Path:
+        """Manually compact the active session's model context and persist it."""
+        if self.session is None:
+            raise RuntimeError("no active session to compact")
+        if self.context_manager is None:
+            self.messages = compact_messages(self.messages, force=True)
+        else:
+            self.messages = self.context_manager.compact_messages(self.messages, force=True)
+        return self._save_session(self.session.step)
+
     def fork(self, parent_id: str, text: str) -> AgentRun:
         """Branch a new session off ``parent_id`` and run one turn on it."""
         parent = self.session_store.load(parent_id)

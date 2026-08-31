@@ -299,6 +299,13 @@ def _run_repl(
                 if verb == "help":
                     ui.info(REPL_HELP)
                     continue
+                if verb == "compact":
+                    if agent is None or agent.session is None:
+                        ui.info("No active conversation to compact.")
+                        continue
+                    path = agent.compact_context()
+                    ui.info(f"Compacted current conversation. Session saved at {path}.")
+                    continue
                 if verb == "tree":
                     ui.info(format_session_tree(_list_sessions(workspace), head_id))
                     continue

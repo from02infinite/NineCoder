@@ -39,11 +39,14 @@ class ParseCommandTest(unittest.TestCase):
         self.assertEqual(parse_command("/sessions"), ("list", ""))
         self.assertEqual(parse_command("/help"), ("help", ""))
 
+    def test_compact(self) -> None:
+        self.assertEqual(parse_command("/compact"), ("compact", ""))
+
     def test_unknown_command(self) -> None:
         self.assertEqual(parse_command("/frobnicate"), ("unknown", "/frobnicate"))
 
     def test_help_text_mentions_commands(self) -> None:
-        for command in ("/new", "/switch", "/tree", "/list", "/help"):
+        for command in ("/new", "/switch", "/compact", "/tree", "/list", "/help"):
             self.assertIn(command, REPL_HELP)
 
 

@@ -14,6 +14,7 @@ Commands:
   <message>       Continue the current conversation
   /new            Start a brand-new conversation
   /switch <id>    Branch from an existing session on your next message
+  /compact        Compact the current conversation context
   /tree           Show the conversation tree
   /list           List all saved sessions
   /help           Show this help
@@ -36,6 +37,8 @@ def parse_command(text: str) -> tuple[str, str] | None:
         return ("new", arg)
     if verb in ("/switch", "/checkout"):
         return ("switch", arg)
+    if verb == "/compact":
+        return ("compact", arg)
     if verb in ("/tree", "/branches"):
         return ("tree", arg)
     if verb in ("/list", "/sessions"):

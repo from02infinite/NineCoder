@@ -80,6 +80,26 @@ class MultiTurnTest(unittest.TestCase):
             ]
             self.assertIn("second turn", user_contents)
 
+    def test_manual_compact_context_persists_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = CodingAgent(
+                FakeModel(),
+                Workspace(tmp),
+                AgentConfig(max_steps=5, permission_mode=PermissionMode.AUTO, memory=False),
+            )
+            result = agent.run("create ok.txt")
+            if agent.context_manager is not None:
+                agent.context_manager.model = None
+
+            session_path = agent.compact_context()
+
+            self.assertEqual(session_path, result.session_path)
+            summary_file = Path(tmp) / "runs" / "context" / result.session_id / "summary.md"
+            self.assertTrue(summary_file.exists())
+            self.assertIn("write a file", summary_file.read_text(encoding="utf-8"))
+            state = SessionStore(Path(tmp) / "runs" / "sessions").load(result.session_id)
+            self.assertIn("Context compacted", state.messages[2]["content"])
+
     def test_fork_creates_child_session_with_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             agent = CodingAgent(

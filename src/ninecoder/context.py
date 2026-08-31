@@ -19,12 +19,12 @@ _SUMMARY_SYSTEM = (
 )
 
 
-def compact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if len(messages) <= KEEP_RECENT_MESSAGES + 2:
+def compact_messages(messages: list[dict[str, Any]], *, force: bool = False) -> list[dict[str, Any]]:
+    if not force and len(messages) <= KEEP_RECENT_MESSAGES + 2:
         return [_compact_message(message) for message in valid_model_messages(messages)]
     head = messages[:2]
     groups = message_groups(messages[2:])
-    tail_start = tail_start_for(groups, KEEP_RECENT_MESSAGES)
+    tail_start = tail_start_for(groups, 1 if force else KEEP_RECENT_MESSAGES)
     omitted_groups = groups[:tail_start]
     tail = flatten_groups(groups[tail_start:])
     omitted = len(flatten_groups(omitted_groups))
@@ -86,15 +86,20 @@ class ContextManager:
             path,
         )
 
-    def compact_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if len(messages) <= self.keep_recent_messages + 2:
+    def compact_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        force: bool = False,
+    ) -> list[dict[str, Any]]:
+        if not force and len(messages) <= self.keep_recent_messages + 2:
             return [
                 _compact_message(message, self.max_tool_chars)
                 for message in valid_model_messages(messages)
             ]
         head = messages[:2]
         groups = message_groups(messages[2:])
-        tail_start = tail_start_for(groups, self.keep_recent_messages)
+        tail_start = tail_start_for(groups, 1 if force else self.keep_recent_messages)
         omitted = flatten_groups(groups[:tail_start])
         tail = flatten_groups(groups[tail_start:])
         summary_text = self._summarize(omitted)
