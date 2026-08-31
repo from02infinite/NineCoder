@@ -4,8 +4,10 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from ninecoder.model_client import ModelResponse
+from ninecoder.agent import AgentConfig, CodingAgent
+from ninecoder.model_client import ModelResponse, ToolCall
 from ninecoder.permissions import PermissionMode
+from ninecoder.prompts import skills_block
 from ninecoder.skills import SkillLibrary
 from ninecoder.tools import ToolRegistry
 from ninecoder.workspace import Workspace
@@ -20,7 +22,43 @@ class TextModel:
         return ModelResponse("subagent advice")
 
 
+class CaptureModel:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, Any]] = []
+
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        self.messages = messages
+        return ModelResponse("finish", [ToolCall("call_1", "finish", {"summary": "ok"})])
+
+
 class SkillAndSubagentTest(unittest.TestCase):
+    def test_skills_block_lists_names(self) -> None:
+        self.assertEqual(skills_block([]), "")
+        self.assertIn("- reviewer", skills_block(["reviewer", "python-debugging"]))
+
+    def test_agent_injects_available_skills_into_system_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill_dir = root / "skills"
+            skill_dir.mkdir()
+            (skill_dir / "demo.md").write_text("# Demo\nUse care.", encoding="utf-8")
+
+            model = CaptureModel()
+            CodingAgent(
+                model,
+                Workspace(root / "work"),
+                AgentConfig(permission_mode=PermissionMode.AUTO, memory=False),
+                skill_library=SkillLibrary(skill_dir),
+            ).run("finish")
+
+            system = model.messages[0]["content"]
+            self.assertIn("## Available skills", system)
+            self.assertIn("- demo", system)
+
     def test_load_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

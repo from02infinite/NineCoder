@@ -38,6 +38,19 @@ Workspace:
 """
 
 
+def skills_block(names: list[str]) -> str:
+    """Render the available on-demand skills for the system prompt."""
+    if not names:
+        return ""
+    bullets = "\n".join(f"- {name}" for name in names)
+    return (
+        "## Available skills\n"
+        "\n"
+        "On-demand skills you can load with the load_skill tool:\n"
+        f"{bullets}"
+    )
+
+
 def no_tool_retry(content: str) -> str:
     return f"""Your previous response did not call a tool.
 

@@ -21,8 +21,9 @@ from ninecoder.hooks import (
 from ninecoder.memory import MemoryStore, extract_facts, memory_block
 from ninecoder.model_client import ModelResponse
 from ninecoder.permissions import PermissionMode
-from ninecoder.prompts import SYSTEM_PROMPT, no_tool_retry, task_prompt
+from ninecoder.prompts import SYSTEM_PROMPT, no_tool_retry, skills_block, task_prompt
 from ninecoder.session import SessionState, SessionStore
+from ninecoder.skills import SkillLibrary
 from ninecoder.subagents import SubagentTaskRunner
 from ninecoder.tools import ToolRegistry, ToolResult
 from ninecoder.trajectory import Trajectory
@@ -70,6 +71,7 @@ class CodingAgent:
         config: AgentConfig,
         hooks: list[AgentHook] | None = None,
         ui: "AgentUI | None" = None,
+        skill_library: SkillLibrary | None = None,
     ):
         from ninecoder.ui.base import AgentUI
 
@@ -82,6 +84,7 @@ class CodingAgent:
             config.permission_mode,
             model=model,
             ui=self.ui,
+            skill_library=skill_library,
         )
         self.hooks: list[AgentHook] = hooks or [NullHook()]
         self.messages: list[dict[str, Any]] = []
@@ -187,6 +190,9 @@ class CodingAgent:
                 ).read().strip()
                 if memory:
                     system_content += "\n\n" + memory_block(memory)
+            skills = self.tools.skill_library.names()
+            if skills:
+                system_content += "\n\n" + skills_block(skills)
             start_request = self._before_agent_start(
                 AgentStartRequest(
                     task,
