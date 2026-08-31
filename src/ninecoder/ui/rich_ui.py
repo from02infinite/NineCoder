@@ -163,6 +163,10 @@ class RichUI(AgentUI):
         if self._debug:
             self.console.print(Text(f"[debug] {message}", style="dim"))
 
+    def info(self, text: str) -> None:
+        for line in text.splitlines():
+            self.console.print(line, markup=False)
+
     def error(self, message: str) -> None:
         for line in message.splitlines():
             self.console.print(Text(f"✗ {line}", style="red"))

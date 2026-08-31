@@ -140,6 +140,18 @@ class PlainUITest(unittest.TestCase):
         ui.debug("iteration=3")
         self.assertEqual(stream.getvalue(), "[debug] iteration=3\n")
 
+    def test_info_emits_lines(self) -> None:
+        stream = io.StringIO()
+        ui = PlainUI(UiContext(), stream=stream)
+        ui.info("hello\nworld")
+        self.assertEqual(stream.getvalue(), "hello\nworld\n")
+
+
+class InfoTest(unittest.TestCase):
+    def test_null_ui_info_is_noop(self) -> None:
+        # base AgentUI.info is a no-op; NullUI inherits it, so this must not raise.
+        NullUI().info("ignored")
+
 
 if __name__ == "__main__":
     unittest.main()

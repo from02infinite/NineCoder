@@ -10,6 +10,8 @@ from ninecoder.agent import AgentConfig, CodingAgent
 from ninecoder.config import ModelConfig
 from ninecoder.model_client import ModelClient
 from ninecoder.permissions import PermissionMode
+from ninecoder.repl import REPL_HELP, format_session_list, format_session_tree, parse_command
+from ninecoder.session import SessionState, SessionStore
 from ninecoder.ui import UiContext, make_ui
 from ninecoder.workspace import Workspace
 
@@ -218,6 +220,26 @@ def _build_ui(
     return make_ui(mode=mode, context=context)
 
 
+def _build_agent(
+    ui: object,
+    model_config: ModelConfig,
+    workspace: Workspace,
+    args: argparse.Namespace,
+    resume_session: str = "",
+) -> CodingAgent:
+    return CodingAgent(
+        ModelClient(model_config),
+        workspace,
+        AgentConfig(
+            max_steps=args.max_steps,
+            permission_mode=PermissionMode(args.permission),
+            test_cmd=args.test_cmd,
+            resume_session=resume_session,
+        ),
+        ui=ui,
+    )
+
+
 def _run_once(
     ui: object,
     model_config: ModelConfig,
@@ -229,17 +251,7 @@ def _run_once(
 ) -> object:
     if resume_session is None:
         resume_session = args.resume_session
-    agent = CodingAgent(
-        ModelClient(model_config),
-        workspace,
-        AgentConfig(
-            max_steps=args.max_steps,
-            permission_mode=PermissionMode(args.permission),
-            test_cmd=args.test_cmd,
-            resume_session=resume_session,
-        ),
-        ui=ui,
-    )
+    agent = _build_agent(ui, model_config, workspace, args, resume_session)
     return agent.run(task if task is not None else " ".join(args.task))
 
 
@@ -250,6 +262,9 @@ def _run_repl(
     args: argparse.Namespace,
 ) -> int:
     ui.session_started()
+    agent: CodingAgent | None = None
+    head_id = ""
+    fork_from = ""
     try:
         while True:
             text = ui.prompt_input()
@@ -258,10 +273,49 @@ def _run_repl(
             text = text.strip()
             if not text:
                 continue
-            if text in ("exit", "quit", "/exit", "/quit"):
-                break
+            command = parse_command(text)
+            if command is not None:
+                verb, arg = command
+                if verb == "quit":
+                    break
+                if verb == "new":
+                    agent = None
+                    head_id = ""
+                    fork_from = ""
+                    ui.info("Starting a new conversation.")
+                    continue
+                if verb == "help":
+                    ui.info(REPL_HELP)
+                    continue
+                if verb == "tree":
+                    ui.info(format_session_tree(_list_sessions(workspace), head_id))
+                    continue
+                if verb == "list":
+                    ui.info(format_session_list(_list_sessions(workspace), head_id))
+                    continue
+                if verb == "switch":
+                    target = _resolve_session(_list_sessions(workspace), arg)
+                    if target is None:
+                        ui.info(f"No session matches '{arg}'. Try /list.")
+                        continue
+                    fork_from = target
+                    head_id = target
+                    ui.info(f"Will branch from {target}. Your next message forks a new session.")
+                    continue
+                ui.info(f"Unknown command: {arg}. Try /help.")
+                continue
             try:
-                _run_once(ui, model_config, workspace, args, task=text, resume_session="")
+                if fork_from:
+                    if agent is None:
+                        agent = _build_agent(ui, model_config, workspace, args)
+                    result = agent.fork(fork_from, text)
+                elif agent is None:
+                    agent = _build_agent(ui, model_config, workspace, args)
+                    result = agent.run(text)
+                else:
+                    result = agent.continue_turn(text)
+                head_id = result.session_id
+                fork_from = ""
             except KeyboardInterrupt:
                 ui.error("Interrupted")
             except Exception as exc:
@@ -269,6 +323,21 @@ def _run_repl(
     finally:
         ui.shutdown()
     return 0
+
+
+def _list_sessions(workspace: Workspace) -> list[SessionState]:
+    # ``runs`` matches AgentConfig.runs_dir (the CLI exposes no override).
+    return SessionStore(Path(workspace.root) / "runs" / "sessions").list()
+
+
+def _resolve_session(sessions: list[SessionState], arg: str) -> str | None:
+    if not arg:
+        return None
+    exact = [session.id for session in sessions if session.id == arg]
+    if exact:
+        return exact[0]
+    prefixes = [session.id for session in sessions if session.id.startswith(arg)]
+    return prefixes[0] if len(prefixes) == 1 else None
 
 
 def _error_message(args: argparse.Namespace, exc: BaseException) -> str:

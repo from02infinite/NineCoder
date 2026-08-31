@@ -13,6 +13,7 @@ from ninecoder.model_client import ModelResponse
 from ninecoder.permissions import PermissionMode
 from ninecoder.prompts import SYSTEM_PROMPT, no_tool_retry, task_prompt
 from ninecoder.session import SessionState, SessionStore
+from ninecoder.subagents import SubagentTaskRunner
 from ninecoder.tools import ToolRegistry, ToolResult
 from ninecoder.trajectory import Trajectory
 from ninecoder.workspace import Workspace
@@ -78,7 +79,56 @@ class CodingAgent:
         self.context_manager: ContextManager | None = None
 
     def run(self, task: str) -> AgentRun:
-        start_step = 0
+        self._start(task)
+        return self._loop()
+
+    def continue_turn(self, text: str) -> AgentRun:
+        """Continue the active session with a new user message."""
+        if self.session is None:
+            raise RuntimeError("no active session to continue")
+        self.session.status = "running"
+        self.messages.append({"role": "user", "content": text})
+        self.ui.user_message(text)
+        return self._loop()
+
+    def fork(self, parent_id: str, text: str) -> AgentRun:
+        """Branch a new session off ``parent_id`` and run one turn on it."""
+        parent = self.session_store.load(parent_id)
+        new_messages = list(parent.messages) + [{"role": "user", "content": text}]
+        self.messages = new_messages
+        self.session = self.session_store.create(
+            _short_label(text),
+            parent.workspace,
+            parent.permission_mode,
+            new_messages,
+            parent_id=parent_id,
+        )
+        self.tools.todos = []
+        self.tools.task_graph = []
+        if self.tools.subagent_runner is not None:
+            self.tools.subagent_runner = SubagentTaskRunner(self.model)
+        self.context_manager = ContextManager(
+            self.workspace.root,
+            self.config.runs_dir,
+            self.session.id,
+            model=self.model,
+        )
+        self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
+        self.trajectory.write(
+            "run_start",
+            {
+                "task": text,
+                "workspace": str(self.workspace.root),
+                "permission_mode": self.config.permission_mode.value,
+                "session_id": self.session.id,
+                "parent_id": parent_id,
+                "resumed": False,
+            },
+        )
+        self.ui.user_message(text)
+        return self._loop()
+
+    def _start(self, task: str) -> None:
         if self.config.resume_session:
             self.session = self.session_store.load(self.config.resume_session)
             self.messages = list(self.session.messages)
@@ -86,7 +136,6 @@ class CodingAgent:
             self.tools.task_graph = list(self.session.task_graph)
             if self.tools.subagent_runner is not None:
                 self.tools.subagent_runner.import_tasks(self.session.subagent_tasks)
-            start_step = self.session.step
             task = self.session.task
             self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
         else:
@@ -121,6 +170,11 @@ class CodingAgent:
             },
         )
         self.ui.user_message(task)
+
+    def _loop(self) -> AgentRun:
+        if self.session is None:
+            raise RuntimeError("session is not initialized")
+        start_step = self.session.step
         consecutive_format_errors = 0
         for step in range(start_step + 1, start_step + self.config.max_steps + 1):
             self.ui.debug(f"iteration={step}")
@@ -357,4 +411,9 @@ def _expects_one_argument(method: Any) -> bool:
 
 def _compact_args(arguments: dict[str, Any], limit: int = 160) -> str:
     text = json.dumps(arguments, ensure_ascii=False)
+    return text if len(text) <= limit else f"{text[: limit - 3]}..."
+
+
+def _short_label(text: str, limit: int = 60) -> str:
+    text = text.strip().replace("\n", " ")
     return text if len(text) <= limit else f"{text[: limit - 3]}..."

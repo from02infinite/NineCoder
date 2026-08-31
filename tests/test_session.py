@@ -6,7 +6,7 @@ from typing import Any
 from ninecoder.agent import AgentConfig, CodingAgent
 from ninecoder.model_client import ModelResponse, ToolCall
 from ninecoder.permissions import PermissionMode
-from ninecoder.session import SessionStore
+from ninecoder.session import SessionState, SessionStore, build_session_tree
 from ninecoder.workspace import Workspace
 
 
@@ -113,6 +113,58 @@ class SessionTest(unittest.TestCase):
             state = SessionStore(Path(tmp) / "runs" / "sessions").load(result.session_id)
 
             self.assertEqual(state.subagent_tasks[0]["result"], "subagent result")
+
+
+class SessionTreeTest(unittest.TestCase):
+    def test_parent_id_roundtrips_through_save_and_load(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp) / "runs" / "sessions")
+            store.create(
+                "task",
+                tmp,
+                PermissionMode.AUTO.value,
+                [{"role": "user", "content": "hi"}],
+                session_id="child",
+                parent_id="parent-1",
+            )
+            self.assertEqual(store.load("child").parent_id, "parent-1")
+
+    def test_list_returns_saved_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp) / "runs" / "sessions")
+            store.create("a", tmp, PermissionMode.AUTO.value, [], session_id="s-1")
+            store.create("b", tmp, PermissionMode.AUTO.value, [], session_id="s-2")
+            self.assertEqual(sorted(s.id for s in store.list()), ["s-1", "s-2"])
+
+    def test_list_skips_malformed_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp) / "runs" / "sessions")
+            store.create("a", tmp, PermissionMode.AUTO.value, [], session_id="s-1")
+            (Path(tmp) / "runs" / "sessions" / "s-2").mkdir(parents=True)
+            (Path(tmp) / "runs" / "sessions" / "s-2" / "session.json").write_text(
+                "{not json", encoding="utf-8"
+            )
+            self.assertEqual([s.id for s in store.list()], ["s-1"])
+
+    def test_build_session_tree_roots_and_children(self) -> None:
+        root = SessionState(id="root", task="", workspace="", permission_mode="")
+        child = SessionState(
+            id="child", task="", workspace="", permission_mode="", parent_id="root"
+        )
+        grand = SessionState(
+            id="grand", task="", workspace="", permission_mode="", parent_id="child"
+        )
+        roots, children = build_session_tree([root, child, grand])
+        self.assertEqual(roots, ["root"])
+        self.assertEqual(children, {"root": ["child"], "child": ["grand"]})
+
+    def test_build_session_tree_missing_parent_becomes_root(self) -> None:
+        orphan = SessionState(
+            id="orphan", task="", workspace="", permission_mode="", parent_id="gone"
+        )
+        roots, children = build_session_tree([orphan])
+        self.assertEqual(roots, ["orphan"])
+        self.assertEqual(children, {})
 
 
 if __name__ == "__main__":

@@ -97,6 +97,10 @@ class PlainUI(AgentUI):
         if self._debug:
             self._emit(f"[debug] {message}")
 
+    def info(self, text: str) -> None:
+        for line in text.splitlines():
+            self._emit(line)
+
     def error(self, message: str) -> None:
         self._emit(f"✗ {message}")
 

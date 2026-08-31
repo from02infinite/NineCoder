@@ -90,6 +90,9 @@ class AgentUI:
     def debug(self, message: str) -> None:
         """Internal diagnostic line (only shown in debug mode)."""
 
+    def info(self, text: str) -> None:
+        """A user-visible informational line (command output such as /tree)."""
+
     def error(self, message: str) -> None:
         """A user-visible error."""
 
