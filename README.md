@@ -21,14 +21,20 @@ python scripts/create_demo_workspace.py
 ninecoder \
   --permission auto \
   --workspace demo_workspace \
-  --test-cmd "python -m unittest -q" \
+  --test "python -m unittest -q" \
   "Make divide raise ValueError('division by zero') when b is zero, then run tests"
 ```
 
 Resume an unfinished run:
 
 ```bash
-ninecoder --workspace demo_workspace --resume-session 20260831-120000-000000
+ninecoder --workspace demo_workspace --resume 20260831-120000-000000
+```
+
+Print a script-friendly final report:
+
+```bash
+ninecoder --json --workspace demo_workspace "Fix the bug and run tests"
 ```
 
 Run local tests:
