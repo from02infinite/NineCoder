@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ninecoder.context import compact_messages
+from ninecoder.hooks import AgentHook, NullHook
 from ninecoder.model_client import ModelResponse
 from ninecoder.permissions import PermissionMode
 from ninecoder.prompts import SYSTEM_PROMPT, no_tool_retry, task_prompt
@@ -43,11 +44,13 @@ class CodingAgent:
         model: ChatModel,
         workspace: Workspace,
         config: AgentConfig,
+        hooks: list[AgentHook] | None = None,
     ):
         self.model = model
         self.workspace = workspace
         self.config = config
-        self.tools = ToolRegistry(workspace, config.permission_mode)
+        self.tools = ToolRegistry(workspace, config.permission_mode, model=model)
+        self.hooks: list[AgentHook] = hooks or [NullHook()]
         self.messages: list[dict[str, Any]] = []
         self.trajectory = Trajectory(Path(workspace.root) / config.runs_dir)
 
@@ -101,7 +104,11 @@ class CodingAgent:
                 continue
             consecutive_format_errors = 0
             for call in response.tool_calls:
+                for hook in self.hooks:
+                    hook.before_tool(call.name, call.arguments)
                 result = self.tools.execute(call.name, call.arguments)
+                for hook in self.hooks:
+                    hook.after_tool(call.name, result.content, result.is_error)
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": call.id,
@@ -122,6 +129,8 @@ class CodingAgent:
                     },
                 )
                 if result.terminate:
+                    for hook in self.hooks:
+                        hook.on_finish(result.content)
                     return self._stop(result.content, step, "finished")
         return self._stop(
             f"Reached max_steps={self.config.max_steps} before finish.",

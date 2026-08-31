@@ -6,6 +6,8 @@ from typing import Any, Callable
 
 from ninecoder.errors import PermissionDenied
 from ninecoder.permissions import Decision, PermissionMode, evaluate_permission
+from ninecoder.skills import SkillLibrary
+from ninecoder.subagents import ask_subagent
 from ninecoder.workspace import Workspace
 
 
@@ -36,9 +38,18 @@ class Tool:
 
 
 class ToolRegistry:
-    def __init__(self, workspace: Workspace, mode: PermissionMode):
+    def __init__(
+        self,
+        workspace: Workspace,
+        mode: PermissionMode,
+        *,
+        model: Any | None = None,
+        skill_library: SkillLibrary | None = None,
+    ):
         self.workspace = workspace
         self.mode = mode
+        self.model = model
+        self.skill_library = skill_library or SkillLibrary()
         self.todos: list[dict[str, str]] = []
         self._tools: dict[str, Tool] = {}
         self._register_builtin_tools()
@@ -202,6 +213,29 @@ class ToolRegistry:
         )
         self._register(
             Tool(
+                "load_skill",
+                "Load an on-demand markdown skill by name.",
+                object_schema({"name": string("Skill name")}, required=["name"]),
+                self._load_skill,
+            )
+        )
+        self._register(
+            Tool(
+                "spawn_subagent",
+                "Ask a lightweight read-only subagent for planning or review advice.",
+                object_schema(
+                    {
+                        "role": string("Subagent role, such as planner or reviewer"),
+                        "prompt": string("Question or task for the subagent"),
+                        "context": string("Optional compact context for the subagent"),
+                    },
+                    required=["role", "prompt"],
+                ),
+                self._spawn_subagent,
+            )
+        )
+        self._register(
+            Tool(
                 "finish",
                 "Finish the task with a concise summary and evidence.",
                 object_schema({"summary": string("Final task summary")}, required=["summary"]),
@@ -225,6 +259,24 @@ class ToolRegistry:
     def _update_todo(self, args: dict[str, Any]) -> ToolResult:
         self.todos = list(args.get("todos", []))
         return ToolResult(json.dumps(self.todos, ensure_ascii=False, indent=2))
+
+    def _load_skill(self, args: dict[str, Any]) -> ToolResult:
+        skill = self.skill_library.load(args["name"])
+        return ToolResult(
+            f"Loaded skill: {skill.name}\n\n{skill.content}",
+            metadata={"skill": skill.name},
+        )
+
+    def _spawn_subagent(self, args: dict[str, Any]) -> ToolResult:
+        if self.model is None:
+            return ToolResult("No model is attached for subagent calls.", is_error=True)
+        answer = ask_subagent(
+            self.model,
+            args["role"],
+            args["prompt"],
+            args.get("context", ""),
+        )
+        return ToolResult(answer, metadata={"role": args["role"]})
 
     def _target_argument(self, arguments: dict[str, Any]) -> str:
         for key in ("path", "file_path", "target", "command"):
