@@ -143,6 +143,10 @@ class CodingAgent:
                     call.to_openai() for call in response.tool_calls
                 ]
             self.messages.append(assistant_message)
+            # Persist once per model step, not per tool result. Tool results are
+            # intermediate within a step; saving after each would rewrite the
+            # whole session JSON on every tool call (O(n^2) disk I/O) and leave
+            # a partial tool group that resume would have to drop anyway.
             self._save_session(step)
             self.trajectory.write(
                 "assistant",
@@ -192,7 +196,6 @@ class CodingAgent:
                     "content": stored_result.content_for_model,
                 }
                 self.messages.append(tool_message)
-                self._save_session(step)
                 self.trajectory.write(
                     "tool_result",
                     {
