@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -15,6 +16,77 @@ MAX_READ_LINES = 400
 MAX_SEARCH_MATCHES = 120
 MAX_OUTPUT_CHARS = 12000
 LINE_PREVIEW_CHARS = 2000
+
+# Best-effort blacklist for `run_shell`. This is a tripwire against accidental
+# damage, NOT a sandbox: commands still run as the current user and can read or
+# modify files outside the workspace. Prefer `--permission ask` (or an OS-level
+# sandbox) when the model handles untrusted tasks. The list is intentionally
+# conservative on the *blocking* side — a false positive merely denies a command
+# the model can rephrase; a false negative is a hole.
+_BLOCKED_COMMANDS = {
+    # Interactive editors and pagers would hang the non-interactive loop.
+    "vim", "vi", "nano", "emacs", "less", "more", "top", "htop",
+    # Privilege escalation.
+    "sudo", "su", "doas", "pkexec", "sudoedit",
+    # Destructive or administrative.
+    "shutdown", "reboot", "halt", "poweroff", "telinit",
+    "mkfs", "mkswap", "dd", "fsck", "fdisk", "parted", "partprobe",
+}
+
+# Neutral wrappers that don't change which command actually runs. (`sudo` and
+# friends are NOT here — they are blocked themselves.)
+_PREFIX_WORDS = {"env", "command", "builtin", "exec", "nice", "nohup", "time"}
+
+_BLOCKED_PATTERNS = [
+    # A tail/less following a stream never terminates.
+    re.compile(r"\btail\b\s+(-\w*f\w*|-f|--follow)(\s|$)"),
+    # Classic fork bomb.
+    re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;"),
+]
+
+
+def _is_blocked_command(command: str) -> bool:
+    """Return True when a shell command looks too dangerous to run blindly."""
+    normalized = command.lower()
+    # Drop backslash escapes (`\sudo`) so the real command name is visible.
+    normalized = re.sub(r"\\", "", normalized)
+    tokens = normalized.split()
+    if not tokens:
+        return False
+    name = _command_name(tokens)
+    if name in _BLOCKED_COMMANDS:
+        return True
+    if name == "rm" and _is_dangerous_rm(tokens):
+        return True
+    body = " ".join(tokens)
+    return any(pattern.search(body) for pattern in _BLOCKED_PATTERNS)
+
+
+def _command_name(tokens: list[str]) -> str:
+    """Basename of the first token that is neither an env assignment nor a
+    neutral wrapper, e.g. ``env FOO=1 /usr/bin/sudo`` -> ``sudo``. ``.stem``
+    drops a command-family suffix so ``mkfs.ext4`` matches ``mkfs``."""
+    for token in tokens:
+        if "=" in token and not token.startswith(("-", "--")):
+            continue
+        if token in _PREFIX_WORDS:
+            continue
+        return Path(token).stem
+    return ""
+
+
+def _is_dangerous_rm(tokens: list[str]) -> bool:
+    """True for ``rm`` with recursive + force flags targeting a root-ish path."""
+    flags = "".join(token for token in tokens if token.startswith("-") and not token.startswith("--"))
+    recursive = bool(re.search(r"[rR]", flags) or "-R" in tokens or "--recursive" in tokens)
+    force = bool(re.search(r"[fF]", flags) or "--force" in tokens)
+    if not (recursive and force):
+        return False
+    targets = [token for token in tokens if not token.startswith("-")]
+    return any(
+        target.startswith(("/", "~", "..")) or target in {"*", "."}
+        for target in targets
+    )
 
 
 @dataclass(frozen=True)
@@ -141,22 +213,7 @@ class Workspace:
         command = command.strip()
         if not command:
             raise ToolError("command must not be empty")
-        lowered = " ".join(command.lower().split())
-        blocked = [
-            "sudo",
-            "su ",
-            "vim",
-            "vi ",
-            "nano",
-            "emacs",
-            "less",
-            "tail -f",
-            "rm -rf /",
-            "shutdown",
-            "reboot",
-            "mkfs",
-        ]
-        if any(lowered == item.strip() or lowered.startswith(item) for item in blocked):
+        if _is_blocked_command(command):
             raise PermissionDenied(f"blocked shell command: {command}")
         proc = subprocess.Popen(
             command,
