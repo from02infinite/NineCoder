@@ -284,7 +284,7 @@ class ToolRegistry:
         self._register(
             Tool(
                 "start_subagent_task",
-                "Run a read-only subagent task and keep its task record.",
+                "Run a read-only subagent (synchronously) and save its completed result as a task record for later reading.",
                 object_schema(
                     {
                         "role": string("Subagent role, such as planner or reviewer"),
@@ -299,7 +299,7 @@ class ToolRegistry:
         self._register(
             Tool(
                 "read_subagent_task",
-                "Read a saved subagent task by id.",
+                "Read a saved, already-completed subagent task by id.",
                 object_schema({"task_id": string("Subagent task id")}, required=["task_id"]),
                 self._read_subagent_task,
             )
@@ -307,7 +307,7 @@ class ToolRegistry:
         self._register(
             Tool(
                 "list_subagent_tasks",
-                "List saved subagent tasks and statuses.",
+                "List saved subagent tasks and their statuses.",
                 object_schema({}),
                 self._list_subagent_tasks,
             )
