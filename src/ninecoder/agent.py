@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import dataclass
 from inspect import signature
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ninecoder.context import ContextManager, StoredToolOutput, compact_messages
 from ninecoder.hooks import AgentHook, ModelRequest, NullHook, ToolRequest, ToolResponse
@@ -14,6 +16,9 @@ from ninecoder.session import SessionState, SessionStore
 from ninecoder.tools import ToolRegistry, ToolResult
 from ninecoder.trajectory import Trajectory
 from ninecoder.workspace import Workspace
+
+if TYPE_CHECKING:
+    from ninecoder.ui.base import AgentUI
 
 
 class ChatModel(Protocol):
@@ -50,11 +55,20 @@ class CodingAgent:
         workspace: Workspace,
         config: AgentConfig,
         hooks: list[AgentHook] | None = None,
+        ui: "AgentUI | None" = None,
     ):
+        from ninecoder.ui.base import AgentUI
+
         self.model = model
         self.workspace = workspace
         self.config = config
-        self.tools = ToolRegistry(workspace, config.permission_mode, model=model)
+        self.ui: "AgentUI" = ui if ui is not None else AgentUI()
+        self.tools = ToolRegistry(
+            workspace,
+            config.permission_mode,
+            model=model,
+            ui=self.ui,
+        )
         self.hooks: list[AgentHook] = hooks or [NullHook()]
         self.messages: list[dict[str, Any]] = []
         self.runs_root = Path(workspace.root) / config.runs_dir
@@ -105,13 +119,21 @@ class CodingAgent:
                 "resumed": bool(self.config.resume_session),
             },
         )
+        self.ui.user_message(task)
         consecutive_format_errors = 0
         for step in range(start_step + 1, start_step + self.config.max_steps + 1):
+            self.ui.debug(f"iteration={step}")
             model_request = self._before_model(
                 ModelRequest(self._model_messages(), self.tools.schemas())
             )
+            self.ui.model_started()
+            model_started_at = time.perf_counter()
             response = self.model.complete(model_request.messages, model_request.tools)
+            elapsed = time.perf_counter() - model_started_at
             response = self._after_model(response)
+            self.ui.model_finished(elapsed, response.finish_reason)
+            if response.content and response.content.strip():
+                self.ui.assistant_text(response.content)
             assistant_message = {
                 "role": "assistant",
                 "content": response.content,
@@ -133,6 +155,7 @@ class CodingAgent:
                 },
             )
             if not response.tool_calls:
+                self.ui.debug(f"no tool calls (finish_reason={response.finish_reason})")
                 consecutive_format_errors += 1
                 if consecutive_format_errors >= 3:
                     return self._stop(
@@ -145,8 +168,18 @@ class CodingAgent:
             consecutive_format_errors = 0
             for call in response.tool_calls:
                 tool_request = self._before_tool(ToolRequest(call.name, call.arguments))
+                self.ui.debug(f"tool={tool_request.name} {_compact_args(tool_request.arguments)}")
+                self.ui.tool_started(tool_request.name, tool_request.arguments)
+                tool_started_at = time.perf_counter()
                 result = self.tools.execute(tool_request.name, tool_request.arguments)
+                elapsed_ms = (time.perf_counter() - tool_started_at) * 1000
                 result = self._after_tool(tool_request.name, result)
+                status = "error" if result.is_error else "ok"
+                self.ui.debug(f"tool {tool_request.name} {status}: {elapsed_ms:.0f}ms")
+                if result.is_error:
+                    self.ui.tool_failed(tool_request.name, tool_request.arguments, result.content)
+                else:
+                    self.ui.tool_finished(tool_request.name, tool_request.arguments, result)
                 stored_result = self._store_tool_result(
                     call.id,
                     tool_request.name,
@@ -188,6 +221,7 @@ class CodingAgent:
         )
 
     def _stop(self, summary: str, steps: int, stopped_by: str) -> AgentRun:
+        self.ui.session_finished(summary=summary, steps=steps, stopped_by=stopped_by)
         session_path = self._save_session(steps, summary=summary, stopped_by=stopped_by)
         self.trajectory.write(
             "run_end",
@@ -315,3 +349,8 @@ def _expects_one_argument(method: Any) -> bool:
         return len(signature(method).parameters) == 1
     except (TypeError, ValueError):
         return True
+
+
+def _compact_args(arguments: dict[str, Any], limit: int = 160) -> str:
+    text = json.dumps(arguments, ensure_ascii=False)
+    return text if len(text) <= limit else f"{text[: limit - 3]}..."

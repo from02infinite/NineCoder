@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from ninecoder.errors import PermissionDenied
 from ninecoder.permissions import Decision, PermissionMode, evaluate_permission
 from ninecoder.skills import SkillLibrary
 from ninecoder.subagents import SubagentTaskRunner
 from ninecoder.workspace import Workspace
+
+if TYPE_CHECKING:
+    from ninecoder.ui.base import AgentUI
 
 
 @dataclass(frozen=True)
@@ -45,10 +48,14 @@ class ToolRegistry:
         *,
         model: Any | None = None,
         skill_library: SkillLibrary | None = None,
+        ui: "AgentUI | None" = None,
     ):
+        from ninecoder.ui.base import AgentUI
+
         self.workspace = workspace
         self.mode = mode
         self.model = model
+        self.ui = ui if ui is not None else AgentUI()
         self.skill_library = skill_library or SkillLibrary()
         self.subagent_runner = SubagentTaskRunner(model) if model is not None else None
         self.todos: list[dict[str, str]] = []
@@ -74,6 +81,10 @@ class ToolRegistry:
         if validation_error:
             return ToolResult(f"Invalid arguments for {name}: {validation_error}", is_error=True)
         permission = evaluate_permission(self.mode, name, self._target_argument(arguments))
+        self.ui.debug(
+            f"permission {permission.decision.value} for {name}"
+            + (f" ({permission.reason})" if permission.reason else "")
+        )
         if permission.decision is Decision.DENY:
             return ToolResult(f"Permission denied: {permission.reason}", is_error=True)
         if permission.decision is Decision.ASK and not self._confirm(name, arguments, permission.reason):
@@ -418,10 +429,7 @@ class ToolRegistry:
         return ""
 
     def _confirm(self, name: str, arguments: dict[str, Any], reason: str) -> bool:
-        print(f"\nPermission required: {name} ({reason})")
-        print(json.dumps(arguments, ensure_ascii=False, indent=2))
-        reply = input("Allow once? [y/N] ").strip().lower()
-        return reply in {"y", "yes"}
+        return self.ui.permission_requested(name, arguments, reason)
 
 
 def string(description: str, default: str | None = None) -> dict[str, Any]:

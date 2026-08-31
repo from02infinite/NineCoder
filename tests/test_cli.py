@@ -28,7 +28,8 @@ class FakeAgent:
         model: Any,
         workspace: Any,
         config: Any,
-        hooks: list[Any],
+        hooks: list[Any] | None = None,
+        ui: Any | None = None,
     ) -> None:
         self.workspace = workspace
 

@@ -3,22 +3,25 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from pathlib import Path
-from typing import TextIO
 
 from ninecoder.agent import AgentConfig, CodingAgent
 from ninecoder.config import ModelConfig
-from ninecoder.hooks import ModelRequest, ToolRequest
 from ninecoder.model_client import ModelClient
 from ninecoder.permissions import PermissionMode
+from ninecoder.ui import UiContext, make_ui
 from ninecoder.workspace import Workspace
 
 
 EXAMPLES = """examples:
+  ninecoder                       # interactive REPL (on a TTY)
   ninecoder "Fix the failing tests"
   ninecoder -w demo --permission auto \\
     --test "python -m unittest -q" "Make tests pass"
   ninecoder -w demo --resume 20260831-120000-000000
+  ninecoder --plain "Fix the bug"   # simple print output (CI / pipes)
+  ninecoder --debug "Fix the bug"   # verbose internal logging
 """
 
 
@@ -30,49 +33,6 @@ class NineCoderParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         self.print_usage(sys.stderr)
         self.exit(2, f"{self.prog}: error: {message}\nTry '{self.prog} --help'.\n")
-
-
-class CliProgressHook:
-    def __init__(self, *, stream: TextIO, quiet: bool = False):
-        self.stream = stream
-        self.quiet = quiet
-        self.step = 0
-
-    def before_model(self, request: ModelRequest) -> None:
-        if self.quiet:
-            return None
-        self.step += 1
-        print(f"[{self.step}] Asking the model...", file=self.stream)
-        return None
-
-    def after_model(self, response: object) -> None:
-        if self.quiet:
-            return None
-        tool_calls = getattr(response, "tool_calls", [])
-        content = str(getattr(response, "content", "") or "").strip()
-        if content:
-            print(f"    {first_line(content)}", file=self.stream)
-        if tool_calls:
-            names = ", ".join(getattr(call, "name", "tool") for call in tool_calls)
-            print(f"    Tools: {names}", file=self.stream)
-        return None
-
-    def before_tool(self, request: ToolRequest) -> None:
-        if not self.quiet:
-            target = tool_target(request.arguments)
-            suffix = f" ({target})" if target else ""
-            print(f"    Running {request.name}{suffix}", file=self.stream)
-        return None
-
-    def after_tool(self, name: str, result: str, is_error: bool) -> None:
-        if not self.quiet:
-            status = "failed" if is_error else "ok"
-            detail = f": {first_line(result)}" if is_error and result.strip() else ""
-            print(f"    {name} {status}{detail}", file=self.stream)
-        return None
-
-    def on_finish(self, summary: str) -> None:
-        return None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -163,14 +123,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the final report as JSON",
     )
+    output_options.add_argument(
+        "--debug",
+        action="store_true",
+        help="Show internal debug logging (iterations, timings, decisions)",
+    )
+    output_options.add_argument(
+        "--plain",
+        action="store_true",
+        help="Disable the rich TUI and print plain-text output",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if not args.task and not args.resume_session:
+
+    interactive = _is_interactive()
+    repl_mode = bool(
+        not args.task
+        and not args.resume_session
+        and interactive
+        and not args.json
+        and not args.quiet
+    )
+    if not args.task and not args.resume_session and not repl_mode:
         parser.error("task is required unless --resume-session is provided")
+
     try:
         model_config = ModelConfig.from_env(
             model=args.model,
@@ -179,46 +159,122 @@ def main(argv: list[str] | None = None) -> int:
             max_tokens=args.max_tokens,
         )
         workspace = Workspace(Path(args.workspace))
-        agent = CodingAgent(
-            ModelClient(model_config),
-            workspace,
-            AgentConfig(
-                max_steps=args.max_steps,
-                permission_mode=PermissionMode(args.permission),
-                test_cmd=args.test_cmd,
-                resume_session=args.resume_session,
-            ),
-            hooks=[CliProgressHook(stream=sys.stderr, quiet=args.quiet or args.json)],
-        )
-        if not args.quiet and not args.json:
-            print_start(args, model_config.model, workspace, file=sys.stderr)
-        result = agent.run(" ".join(args.task))
     except Exception as exc:
         if args.json:
             print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         else:
             print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+    ui = _build_ui(args, model_config, workspace, interactive)
+
+    if repl_mode:
+        return _run_repl(ui, model_config, workspace, args)
+
+    ui.session_started(
+        task=" ".join(args.task),
+        resumed=bool(args.resume_session),
+    )
+    try:
+        result = _run_once(ui, model_config, workspace, args)
+    except Exception as exc:
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        else:
+            ui.error(_error_message(args, exc))
+        return 1
+
     if args.json:
         print(json.dumps(final_report(result, workspace), ensure_ascii=False, indent=2))
     else:
         print_human_report(result, workspace)
+    ui.shutdown()
     return 0 if result.stopped_by == "finished" else 1
 
 
-def print_start(args: argparse.Namespace, model: str, workspace: Workspace, *, file: TextIO) -> None:
-    task = " ".join(args.task).strip()
-    print("NineCoder", file=file)
-    print(f"Workspace: {workspace.root}", file=file)
-    print(f"Model: {model}", file=file)
-    print(f"Permission: {args.permission}", file=file)
-    if args.test_cmd:
-        print(f"Test: {args.test_cmd}", file=file)
-    if args.resume_session:
-        print(f"Resuming: {args.resume_session}", file=file)
-    elif task:
-        print(f"Task: {first_line(task, limit=100)}", file=file)
-    print("", file=file)
+def _is_interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty() and sys.stderr.isatty()
+
+
+def _build_ui(
+    args: argparse.Namespace,
+    model_config: ModelConfig,
+    workspace: Workspace,
+    interactive: bool,
+) -> object:
+    if args.json or args.quiet:
+        mode = "null"
+    elif args.plain or not interactive:
+        mode = "plain"
+    else:
+        mode = "rich"
+    context = UiContext(
+        model=model_config.model,
+        workspace=str(workspace.root),
+        permission=args.permission,
+        test_cmd=args.test_cmd,
+        debug=bool(args.debug),
+    )
+    return make_ui(mode=mode, context=context)
+
+
+def _run_once(
+    ui: object,
+    model_config: ModelConfig,
+    workspace: Workspace,
+    args: argparse.Namespace,
+    *,
+    task: str | None = None,
+    resume_session: str | None = None,
+) -> object:
+    if resume_session is None:
+        resume_session = args.resume_session
+    agent = CodingAgent(
+        ModelClient(model_config),
+        workspace,
+        AgentConfig(
+            max_steps=args.max_steps,
+            permission_mode=PermissionMode(args.permission),
+            test_cmd=args.test_cmd,
+            resume_session=resume_session,
+        ),
+        ui=ui,
+    )
+    return agent.run(task if task is not None else " ".join(args.task))
+
+
+def _run_repl(
+    ui: object,
+    model_config: ModelConfig,
+    workspace: Workspace,
+    args: argparse.Namespace,
+) -> int:
+    ui.session_started()
+    try:
+        while True:
+            text = ui.prompt_input()
+            if text is None:
+                break
+            text = text.strip()
+            if not text:
+                continue
+            if text in ("exit", "quit", "/exit", "/quit"):
+                break
+            try:
+                _run_once(ui, model_config, workspace, args, task=text, resume_session="")
+            except KeyboardInterrupt:
+                ui.error("Interrupted")
+            except Exception as exc:
+                ui.error(_error_message(args, exc))
+    finally:
+        ui.shutdown()
+    return 0
+
+
+def _error_message(args: argparse.Namespace, exc: BaseException) -> str:
+    if getattr(args, "debug", False):
+        return traceback.format_exc()
+    return str(exc)
 
 
 def print_human_report(result: object, workspace: Workspace) -> None:
@@ -251,21 +307,6 @@ def display_path(path: object, workspace: Workspace) -> str:
         return str(candidate.resolve(strict=False).relative_to(workspace.root))
     except ValueError:
         return str(candidate)
-
-
-def first_line(value: str, *, limit: int = 120) -> str:
-    line = value.strip().splitlines()[0] if value.strip() else ""
-    if len(line) <= limit:
-        return line
-    return f"{line[: limit - 3]}..."
-
-
-def tool_target(arguments: dict[str, object]) -> str:
-    for key in ("path", "file_path", "target", "command"):
-        value = arguments.get(key)
-        if isinstance(value, str) and value:
-            return first_line(value, limit=80)
-    return ""
 
 
 if __name__ == "__main__":

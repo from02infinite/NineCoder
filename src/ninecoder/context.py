@@ -15,10 +15,13 @@ SUMMARY_PREVIEW_CHARS = 240
 
 def compact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if len(messages) <= KEEP_RECENT_MESSAGES + 2:
-        return [_compact_message(message) for message in messages]
+        return [_compact_message(message) for message in valid_model_messages(messages)]
     head = messages[:2]
-    tail = messages[-KEEP_RECENT_MESSAGES:]
-    omitted = len(messages) - len(head) - len(tail)
+    groups = message_groups(messages[2:])
+    tail_start = tail_start_for(groups, KEEP_RECENT_MESSAGES)
+    omitted_groups = groups[:tail_start]
+    tail = flatten_groups(groups[tail_start:])
+    omitted = len(flatten_groups(omitted_groups))
     summary = {
         "role": "user",
         "content": (
@@ -26,7 +29,8 @@ def compact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "Use current files and recent tool results as the source of truth.]"
         ),
     }
-    return [_compact_message(message) for message in [*head, summary, *tail]]
+    compacted = valid_model_messages([*head, summary, *tail])
+    return [_compact_message(message) for message in compacted]
 
 
 @dataclass(frozen=True)
@@ -76,10 +80,15 @@ class ContextManager:
 
     def compact_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if len(messages) <= self.keep_recent_messages + 2:
-            return [_compact_message(message, self.max_tool_chars) for message in messages]
+            return [
+                _compact_message(message, self.max_tool_chars)
+                for message in valid_model_messages(messages)
+            ]
         head = messages[:2]
-        tail = messages[-self.keep_recent_messages :]
-        omitted = messages[2 : -self.keep_recent_messages]
+        groups = message_groups(messages[2:])
+        tail_start = tail_start_for(groups, self.keep_recent_messages)
+        omitted = flatten_groups(groups[:tail_start])
+        tail = flatten_groups(groups[tail_start:])
         summary_text = summarize_messages(omitted)
         summary_path = self.root / "summary.md"
         summary_path.write_text(summary_text + "\n", encoding="utf-8")
@@ -92,9 +101,10 @@ class ContextManager:
                 "Use current files and recent tool results as the source of truth."
             ),
         }
+        compacted = valid_model_messages([*head, summary, *tail])
         return [
             _compact_message(message, self.max_tool_chars)
-            for message in [*head, summary, *tail]
+            for message in compacted
         ]
 
 
@@ -125,6 +135,83 @@ def _compact_message(message: dict[str, Any], max_tool_chars: int = MAX_TOOL_CHA
         return copied
     copied["content"] = _head_tail(content, max_tool_chars)
     return copied
+
+
+def message_groups(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    groups: list[list[dict[str, Any]]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        group = [message]
+        index += 1
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            while index < len(messages) and messages[index].get("role") == "tool":
+                group.append(messages[index])
+                index += 1
+        groups.append(group)
+    return groups
+
+
+def tail_start_for(groups: list[list[dict[str, Any]]], keep_recent_messages: int) -> int:
+    kept = 0
+    for index in range(len(groups) - 1, -1, -1):
+        kept += len(groups[index])
+        if kept >= keep_recent_messages:
+            return index
+    return 0
+
+
+def flatten_groups(groups: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [message for group in groups for message in group]
+
+
+def valid_model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    valid: list[dict[str, Any]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        role = message.get("role")
+        if role == "tool":
+            index += 1
+            continue
+        if role == "assistant" and message.get("tool_calls"):
+            group = [message]
+            index += 1
+            while index < len(messages) and messages[index].get("role") == "tool":
+                group.append(messages[index])
+                index += 1
+            if tool_group_is_complete(group):
+                valid.extend(group)
+            elif message.get("content"):
+                copied = deepcopy(message)
+                copied.pop("tool_calls", None)
+                valid.append(copied)
+            continue
+        valid.append(message)
+        index += 1
+    return valid
+
+
+def tool_group_is_complete(group: list[dict[str, Any]]) -> bool:
+    assistant = group[0]
+    expected = tool_call_ids(assistant)
+    actual = [
+        str(message.get("tool_call_id"))
+        for message in group[1:]
+        if message.get("role") == "tool" and message.get("tool_call_id")
+    ]
+    return bool(expected) and len(actual) == len(expected) and set(actual) == expected
+
+
+def tool_call_ids(message: dict[str, Any]) -> set[str]:
+    ids = set()
+    for raw_call in message.get("tool_calls") or []:
+        if not isinstance(raw_call, dict):
+            continue
+        call_id = raw_call.get("id")
+        if isinstance(call_id, str) and call_id:
+            ids.add(call_id)
+    return ids
 
 
 def _head_tail(text: str, limit: int) -> str:
