@@ -6,7 +6,7 @@ from unittest import mock
 
 from ninecoder.config import ModelConfig
 from ninecoder.errors import ModelError
-from ninecoder.model_client import ModelClient, parse_model_response
+from ninecoder.model_client import ModelClient, parse_model_response, parse_sse_lines
 
 
 class _FakeResponse:
@@ -128,3 +128,126 @@ class ModelClientTest(unittest.TestCase):
                 client.complete([{"role": "user", "content": "hi"}], [])
 
         self.assertEqual(urlopen.call_count, 3)
+
+
+class StreamParseTest(unittest.TestCase):
+    def test_parse_sse_accumulates_content_and_finish_reason(self) -> None:
+        lines = [
+            'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}',
+            'data: {"choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}',
+            'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}',
+            "data: [DONE]",
+        ]
+
+        response = parse_sse_lines(lines)
+
+        self.assertEqual(response.content, "Hello world")
+        self.assertEqual(response.finish_reason, "stop")
+        self.assertEqual(response.usage, {"prompt_tokens": 5, "completion_tokens": 2})
+        self.assertTrue(response.streamed)
+        self.assertEqual(response.tool_calls, [])
+
+    def test_parse_sse_emits_chunks_in_order(self) -> None:
+        lines = [
+            'data: {"choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}]}',
+            'data: {"choices":[{"index":0,"delta":{"content":"b"},"finish_reason":null}]}',
+            'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+            "data: [DONE]",
+        ]
+        chunks: list[str] = []
+
+        response = parse_sse_lines(lines, on_chunk=chunks.append)
+
+        self.assertEqual(chunks, ["a", "b"])
+        self.assertEqual(response.content, "ab")
+
+    def test_parse_sse_reassembles_fragmented_tool_calls(self) -> None:
+        lines = [
+            'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"read_file","arguments":""}}]},"finish_reason":null}]}',
+            'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"path\\": "}}]},"finish_reason":null}]}',
+            'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"a.py\\"}"}}]},"finish_reason":null}]}',
+            'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+            "data: [DONE]",
+        ]
+
+        response = parse_sse_lines(lines)
+
+        self.assertEqual(len(response.tool_calls), 1)
+        self.assertEqual(response.tool_calls[0].name, "read_file")
+        self.assertEqual(response.tool_calls[0].id, "c1")
+        self.assertEqual(response.tool_calls[0].arguments, {"path": "a.py"})
+        self.assertEqual(response.finish_reason, "tool_calls")
+
+    def test_parse_sse_ignores_comments_and_keepalive(self) -> None:
+        lines = [
+            ": keep-alive",
+            'data: {"choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}',
+            "data: [DONE]",
+        ]
+
+        response = parse_sse_lines(lines)
+
+        self.assertEqual(response.content, "x")
+
+
+class StreamClientTest(unittest.TestCase):
+    def _streaming_response(self) -> object:
+        class _StreamResponse:
+            def __init__(self) -> None:
+                self._data = [
+                    b'data: {"choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}\n\n',
+                    b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+                    b"data: [DONE]\n\n",
+                ]
+                self._index = 0
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if self._index >= len(self._data):
+                    raise StopIteration
+                item = self._data[self._index]
+                self._index += 1
+                return item
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        return _StreamResponse()
+
+    def test_stream_complete_emits_chunks_and_returns_response(self) -> None:
+        config = ModelConfig("m", "https://api.example.com/v1", "k", 0.2, 4096)
+        client = ModelClient(config)
+        chunks: list[str] = []
+        with mock.patch(
+            "ninecoder.model_client.urllib.request.urlopen",
+            return_value=self._streaming_response(),
+        ):
+            response = client.stream_complete(
+                [{"role": "user", "content": "hi"}], [], chunks.append
+            )
+
+        self.assertEqual(chunks, ["Hello"])
+        self.assertEqual(response.content, "Hello")
+        self.assertEqual(response.finish_reason, "stop")
+        self.assertTrue(response.streamed)
+
+    def test_stream_complete_falls_back_when_disabled(self) -> None:
+        config = ModelConfig("m", "https://api.example.com/v1", "k", 0.2, 4096, stream=False)
+        client = ModelClient(config)
+        chunks: list[str] = []
+        with mock.patch(
+            "ninecoder.model_client.urllib.request.urlopen",
+            return_value=_FakeResponse(_ok_response("done")),
+        ) as urlopen:
+            response = client.stream_complete(
+                [{"role": "user", "content": "hi"}], [], chunks.append
+            )
+
+        self.assertEqual(response.content, "done")
+        self.assertFalse(response.streamed)
+        self.assertEqual(chunks, [])

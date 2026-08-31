@@ -55,6 +55,9 @@ class AgentUI:
     def assistant_stream_chunk(self, chunk: str) -> None:
         """A streaming token. Reserved for future streaming support."""
 
+    def assistant_stream_end(self) -> None:
+        """A streamed assistant message has finished (close the live block)."""
+
     def session_history(self, messages: list[dict[str, Any]]) -> None:
         """Show messages loaded from a resumed session."""
 

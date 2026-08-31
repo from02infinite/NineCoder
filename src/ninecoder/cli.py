@@ -146,6 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=4096,
         help="Maximum response tokens (default: 4096)",
     )
+    model_options.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable streaming model output (env: NINECODER_STREAM=0)",
+    )
 
     output_options = parser.add_argument_group("output options")
     output_options.add_argument(
@@ -198,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=args.base_url,
             temperature=args.temperature,
             max_tokens=args.max_tokens,
+            stream=False if args.no_stream else None,
         )
         sandbox = detect_sandbox(args.sandbox or os.getenv("NINECODER_SANDBOX") or "auto")
         workspace = Workspace(

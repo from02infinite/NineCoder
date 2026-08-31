@@ -56,6 +56,7 @@ class RichUI(AgentUI):
     def __init__(self, context: UiContext | None = None) -> None:
         super().__init__(context)
         self.console = Console(stderr=True, soft_wrap=True, highlight=False)
+        self._stream_buffer: list[str] = []
 
         key_bindings = KeyBindings()
 
@@ -111,8 +112,17 @@ class RichUI(AgentUI):
         self.console.print(Markdown(text))
 
     def assistant_stream_chunk(self, chunk: str) -> None:
-        # Reserved: future streaming support will append to the same block.
-        self.console.print(chunk, end="", markup=False)
+        # Buffer the tokens rather than print them raw: streaming raw Markdown
+        # source would flash `**`/`#`/link syntax to the terminal. Rich renders
+        # the accumulated block as Markdown once the message finishes, keeping
+        # the same quality as the non-streaming path (tool progress stays live).
+        self._stream_buffer.append(chunk)
+
+    def assistant_stream_end(self) -> None:
+        text = "".join(self._stream_buffer)
+        self._stream_buffer = []
+        if text.strip():
+            self.console.print(Markdown(text))
 
     def session_history(self, messages: list[dict[str, Any]]) -> None:
         visible = _visible_history(messages)

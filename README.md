@@ -60,6 +60,7 @@ Useful environment variables:
 - `NINECODER_MODEL`
 - `NINECODER_MAX_RETRIES` (transient model-error retries, default `3`)
 - `NINECODER_SANDBOX` (sandbox backend, default `auto`)
+- `NINECODER_STREAM` (`0` disables streaming model output)
 
 ## Safety
 
@@ -100,3 +101,4 @@ sandbox.
 - Hook points that can inspect or rewrite agent startup, model requests, model responses, tool calls, tool results, and stop events; tool hooks can also block execution with a synthetic result
 - Permission governance with `plan`, `ask`, and `auto`
 - Pluggable OS sandbox for `run_shell` (bubblewrap / sandbox-exec), network-blocked by default
+- Streaming model output (SSE), tokens rendered as they arrive in plain mode (`--no-stream` to disable)

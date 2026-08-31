@@ -146,6 +146,14 @@ class PlainUITest(unittest.TestCase):
         ui.info("hello\nworld")
         self.assertEqual(stream.getvalue(), "hello\nworld\n")
 
+    def test_stream_chunk_and_end(self) -> None:
+        stream = io.StringIO()
+        ui = PlainUI(UiContext(), stream=stream)
+        ui.assistant_stream_chunk("Hello")
+        ui.assistant_stream_chunk(" world")
+        ui.assistant_stream_end()
+        self.assertEqual(stream.getvalue(), "Hello world\n")
+
 
 class InfoTest(unittest.TestCase):
     def test_null_ui_info_is_noop(self) -> None:

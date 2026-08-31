@@ -46,6 +46,62 @@ class RecordingFinishModel:
         return ModelResponse("done", [ToolCall("call_1", "finish", {"summary": "ok"})])
 
 
+class StreamingFinishModel:
+    """A model exposing the optional ``stream_complete`` capability."""
+
+    def __init__(self) -> None:
+        self.stream_ends = 0
+
+    def stream_complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        on_chunk: Any,
+    ) -> ModelResponse:
+        for token in ["do", "ne"]:
+            on_chunk(token)
+        return ModelResponse(
+            "done", [ToolCall("call_1", "finish", {"summary": "ok"})], streamed=True
+        )
+
+
+class StreamRecordingUI:
+    def __init__(self) -> None:
+        self.stream_chunks: list[str] = []
+        self.stream_ends = 0
+
+    def assistant_stream_chunk(self, chunk: str) -> None:
+        self.stream_chunks.append(chunk)
+
+    def assistant_stream_end(self) -> None:
+        self.stream_ends += 1
+
+    # Remaining AgentUI methods the loop touches during a finish-only run.
+    def user_message(self, text: str) -> None:
+        pass
+
+    def model_started(self) -> None:
+        pass
+
+    def model_finished(self, elapsed: float, stop_reason: str) -> None:
+        pass
+
+    def tool_started(self, name: str, arguments: dict[str, Any]) -> None:
+        pass
+
+    def tool_finished(self, name: str, arguments: dict[str, Any], result: Any) -> None:
+        pass
+
+    def tool_failed(self, name: str, arguments: dict[str, Any], message: str) -> None:
+        pass
+
+    def debug(self, message: str) -> None:
+        pass
+
+    def session_finished(self, *, summary: str, steps: int, stopped_by: str) -> None:
+        pass
+
+
 class AgentTest(unittest.TestCase):
     def test_agent_runs_tool_loop_until_finish(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,6 +181,37 @@ class MultiTurnTest(unittest.TestCase):
                 if m["role"] == "user"
             ]
             self.assertNotIn("branch turn", parent_user)
+
+
+class StreamingAgentTest(unittest.TestCase):
+    def test_agent_uses_stream_complete_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ui = StreamRecordingUI()
+            agent = CodingAgent(
+                StreamingFinishModel(),
+                Workspace(tmp),
+                AgentConfig(max_steps=5, permission_mode=PermissionMode.AUTO, memory=False),
+                ui=ui,
+            )
+
+            result = agent.run("stream it")
+
+            self.assertEqual(result.stopped_by, "finished")
+            self.assertEqual(ui.stream_chunks, ["do", "ne"])
+            self.assertEqual(ui.stream_ends, 1)
+
+    def test_agent_falls_back_to_complete_without_stream_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = CodingAgent(
+                FakeModel(),
+                Workspace(tmp),
+                AgentConfig(max_steps=5, permission_mode=PermissionMode.AUTO, memory=False),
+            )
+
+            result = agent.run("create ok.txt")
+
+            self.assertEqual(result.stopped_by, "finished")
+            self.assertEqual((Path(tmp) / "ok.txt").read_text(encoding="utf-8"), "done")
 
 
 if __name__ == "__main__":

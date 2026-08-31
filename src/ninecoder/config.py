@@ -12,6 +12,7 @@ class ModelConfig:
     temperature: float
     max_tokens: int
     max_retries: int = 3
+    stream: bool = True
 
     @classmethod
     def from_env(
@@ -22,6 +23,7 @@ class ModelConfig:
         temperature: float = 0.2,
         max_tokens: int = 4096,
         max_retries: int = 3,
+        stream: bool | None = None,
     ) -> "ModelConfig":
         resolved_model = model or os.getenv("NINECODER_MODEL") or "deepseek-v4-flash"
         resolved_base_url = (
@@ -42,6 +44,15 @@ class ModelConfig:
                 resolved_retries = int(raw_retries)
             except ValueError:
                 resolved_retries = max_retries
+        if stream is None:
+            raw_stream = os.getenv("NINECODER_STREAM")
+            resolved_stream = (
+                raw_stream.strip().lower() not in {"0", "false", "no", "off"}
+                if raw_stream is not None
+                else True
+            )
+        else:
+            resolved_stream = stream
         return cls(
             model=resolved_model,
             base_url=resolved_base_url,
@@ -49,4 +60,5 @@ class ModelConfig:
             temperature=temperature,
             max_tokens=max_tokens,
             max_retries=resolved_retries,
+            stream=resolved_stream,
         )

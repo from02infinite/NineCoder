@@ -250,14 +250,27 @@ class CodingAgent:
             )
             self.ui.model_started()
             model_started_at = time.perf_counter()
-            response = self.model.complete(model_request.messages, model_request.tools)
+            streamer = getattr(self.model, "stream_complete", None)
+            if callable(streamer):
+                response = streamer(
+                    model_request.messages,
+                    model_request.tools,
+                    self.ui.assistant_stream_chunk,
+                )
+                streamed = True
+            else:
+                response = self.model.complete(model_request.messages, model_request.tools)
+                streamed = False
             elapsed = time.perf_counter() - model_started_at
             response = self._after_model(response)
             if self.context_manager is not None:
                 self.context_manager.record_usage(model_request.messages, response.usage)
             self.ui.model_finished(elapsed, response.finish_reason)
             if response.content and response.content.strip():
-                self.ui.assistant_text(response.content)
+                if streamed:
+                    self.ui.assistant_stream_end()
+                else:
+                    self.ui.assistant_text(response.content)
             assistant_message = {
                 "role": "assistant",
                 "content": response.content,

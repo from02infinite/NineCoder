@@ -65,6 +65,10 @@ class PlainUI(AgentUI):
     def assistant_stream_chunk(self, chunk: str) -> None:
         print(chunk, end="", file=self.stream, flush=True)
 
+    def assistant_stream_end(self) -> None:
+        # Close the streamed line before the next tool/status line prints.
+        print(file=self.stream)
+
     def session_history(self, messages: list[dict[str, Any]]) -> None:
         visible = [message for message in messages if message.get("role") != "system"]
         if not visible:
