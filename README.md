@@ -48,12 +48,19 @@ Useful environment variables:
 - `DEEPSEEK_API_KEY` or `NINECODER_API_KEY`
 - `NINECODER_BASE_URL` or `DEEPSEEK_BASE_URL`
 - `NINECODER_MODEL`
+- `NINECODER_MAX_RETRIES` (transient model-error retries, default `3`)
 
 ## Safety
 
 NineCoder never stores API keys. File writes are restricted to the selected
-workspace, sensitive paths are denied, shell commands have timeouts, and
-permission mode can be `plan`, `ask`, or `auto`.
+workspace, sensitive paths (`.env*`, SSH/AWS/GCP keys and directories) are
+denied, shell commands have timeouts, and permission mode can be `plan`, `ask`,
+or `auto`.
+
+`run_shell` is **not** an OS-level sandbox: commands run as your user and a
+dangerous-command blocklist plus timeouts are the only guardrails, so a model in
+`auto` mode can still read or modify files outside the workspace. Use
+`--permission ask` (or an OS sandbox) when the model handles untrusted input.
 
 ## Implemented Agent Features
 
