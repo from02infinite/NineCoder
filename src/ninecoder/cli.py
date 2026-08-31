@@ -140,10 +140,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show internal debug logging (iterations, timings, decisions)",
     )
-    output_options.add_argument(
+    output_style = output_options.add_mutually_exclusive_group()
+    output_style.add_argument(
         "--plain",
         action="store_true",
         help="Disable the rich TUI and print plain-text output",
+    )
+    output_style.add_argument(
+        "--rich",
+        action="store_true",
+        help="Force the rich TUI with Markdown rendering",
     )
     return parser
 
@@ -199,7 +205,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(final_report(result, workspace), ensure_ascii=False, indent=2))
     else:
-        print_human_report(result, workspace)
+        print_human_report(
+            result,
+            workspace,
+            render_markdown=bool(getattr(ui, "renders_markdown", False)),
+        )
     ui.shutdown()
     return 0 if result.stopped_by == "finished" else 1
 
@@ -216,10 +226,12 @@ def _build_ui(
 ) -> object:
     if args.json or args.quiet:
         mode = "null"
-    elif args.plain or not interactive:
+    elif args.plain:
         mode = "plain"
-    else:
+    elif args.rich or interactive:
         mode = "rich"
+    else:
+        mode = "plain"
     context = UiContext(
         model=model_config.model,
         workspace=str(workspace.root),
@@ -365,11 +377,23 @@ def _error_message(args: argparse.Namespace, exc: BaseException) -> str:
     return str(exc)
 
 
-def print_human_report(result: object, workspace: Workspace) -> None:
+def print_human_report(
+    result: object,
+    workspace: Workspace,
+    *,
+    render_markdown: bool = False,
+) -> None:
     report = final_report(result, workspace)
     title = "Done" if report["status"] == "finished" else f"Stopped: {report['status']}"
     print(f"\n{title}")
-    print(report["summary"] or "(no summary)")
+    summary = str(report["summary"] or "(no summary)")
+    if render_markdown:
+        from rich.console import Console
+        from rich.markdown import Markdown
+
+        Console(highlight=False).print(Markdown(summary))
+    else:
+        print(summary)
     print("")
     print(f"Steps: {report['steps']}")
     print(f"Session: {report['session_id']}")

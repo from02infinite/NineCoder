@@ -50,6 +50,8 @@ def _stylized(text: str, style: str) -> Text:
 
 
 class RichUI(AgentUI):
+    renders_markdown = True
+
     def __init__(self, context: UiContext | None = None) -> None:
         super().__init__(context)
         self.console = Console(stderr=True, soft_wrap=True, highlight=False)
@@ -94,7 +96,7 @@ class RichUI(AgentUI):
         else:
             self.console.print(Text(f"✗ Stopped: {stopped_by}", style="yellow"))
         if summary.strip():
-            self.console.print(summary.strip(), markup=False)
+            self.console.print(Markdown(summary.strip()))
 
     # -- conversation ------------------------------------------------------
     def user_message(self, text: str) -> None:

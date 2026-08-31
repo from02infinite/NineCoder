@@ -81,6 +81,40 @@ class CliTest(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual(report["session_path"], "runs/sessions/session-1.json")
 
+    def test_rich_flag_forces_rich_ui_when_noninteractive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = cli.build_parser().parse_args(["--workspace", tmp, "--rich", "fix it"])
+            with redirect_stderr(io.StringIO()):
+                ui = cli._build_ui(args, model_config(), cli.Workspace(Path(tmp)), interactive=False)
+
+        self.assertEqual(type(ui).__name__, "RichUI")
+
+    def test_plain_and_rich_are_mutually_exclusive(self) -> None:
+        parser = cli.build_parser()
+
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args(["--plain", "--rich", "fix it"])
+
+    def test_human_report_can_render_markdown_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            result = FakeRun(
+                summary="# Fixed\n\n- **Rendered** summary",
+                steps=2,
+                trajectory_path=Path(tmp) / "runs" / "session-1.jsonl",
+                session_id="session-1",
+                session_path=Path(tmp) / "runs" / "sessions" / "session-1.json",
+                stopped_by="finished",
+            )
+            with redirect_stdout(stdout):
+                cli.print_human_report(result, cli.Workspace(Path(tmp)), render_markdown=True)
+
+        output = stdout.getvalue()
+        self.assertIn("Fixed", output)
+        self.assertIn("Rendered summary", output)
+        self.assertNotIn("# Fixed", output)
+        self.assertNotIn("**Rendered**", output)
+
 
 @contextmanager
 def patched_cli() -> Iterator[None]:
