@@ -50,7 +50,9 @@ permission mode can be `plan`, `ask`, or `auto`.
 - Tools: bash, read, write, edit, glob/list, grep/search, todo, finish
 - On-demand markdown skill loading
 - Lightweight read-only subagent calls
+- Simple task graph with dependencies
 - Context compaction by recent-window retention and tool-output truncation
 - JSONL trajectory persistence
+- MCP-like local capability router with `tools/list` and `tools/call`
 - Hook points around tool execution and finish
 - Permission governance with `plan`, `ask`, and `auto`

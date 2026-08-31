@@ -17,8 +17,16 @@ class Decision(str, Enum):
     DENY = "deny"
 
 
-READ_ONLY_TOOLS = {"list_files", "read_file", "search", "load_skill", "spawn_subagent"}
-MUTATING_TOOLS = {"edit_file", "write_file", "run_shell", "update_todo"}
+READ_ONLY_TOOLS = {
+    "list_files",
+    "read_file",
+    "search",
+    "load_skill",
+    "spawn_subagent",
+    "update_todo",
+    "update_task_graph",
+}
+MUTATING_TOOLS = {"edit_file", "write_file", "run_shell"}
 
 SENSITIVE_NAMES = {
     ".env",

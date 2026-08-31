@@ -51,6 +51,7 @@ class ToolRegistry:
         self.model = model
         self.skill_library = skill_library or SkillLibrary()
         self.todos: list[dict[str, str]] = []
+        self.task_graph: list[dict[str, Any]] = []
         self._tools: dict[str, Tool] = {}
         self._register_builtin_tools()
 
@@ -68,6 +69,9 @@ class ToolRegistry:
                 f"Unknown tool: {name}. Available tools: {', '.join(self.names)}",
                 is_error=True,
             )
+        validation_error = validate_arguments(tool.parameters, arguments)
+        if validation_error:
+            return ToolResult(f"Invalid arguments for {name}: {validation_error}", is_error=True)
         permission = evaluate_permission(self.mode, name, self._target_argument(arguments))
         if permission.decision is Decision.DENY:
             return ToolResult(f"Permission denied: {permission.reason}", is_error=True)
@@ -213,6 +217,37 @@ class ToolRegistry:
         )
         self._register(
             Tool(
+                "update_task_graph",
+                "Replace the task graph, including simple dependencies between task ids.",
+                object_schema(
+                    {
+                        "tasks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "content": {"type": "string"},
+                                    "status": {
+                                        "type": "string",
+                                        "enum": ["pending", "doing", "done"],
+                                    },
+                                    "depends_on": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "required": ["id", "content", "status"],
+                            },
+                        }
+                    },
+                    required=["tasks"],
+                ),
+                self._update_task_graph,
+            )
+        )
+        self._register(
+            Tool(
                 "load_skill",
                 "Load an on-demand markdown skill by name.",
                 object_schema({"name": string("Skill name")}, required=["name"]),
@@ -259,6 +294,28 @@ class ToolRegistry:
     def _update_todo(self, args: dict[str, Any]) -> ToolResult:
         self.todos = list(args.get("todos", []))
         return ToolResult(json.dumps(self.todos, ensure_ascii=False, indent=2))
+
+    def _update_task_graph(self, args: dict[str, Any]) -> ToolResult:
+        self.task_graph = list(args.get("tasks", []))
+        completed = {
+            task["id"]
+            for task in self.task_graph
+            if task.get("status") == "done" and isinstance(task.get("id"), str)
+        }
+        ready = [
+            task["id"]
+            for task in self.task_graph
+            if task.get("status") == "pending"
+            and all(dep in completed for dep in task.get("depends_on", []))
+        ]
+        return ToolResult(
+            json.dumps(
+                {"tasks": self.task_graph, "ready": ready},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            metadata={"ready": ready},
+        )
 
     def _load_skill(self, args: dict[str, Any]) -> ToolResult:
         skill = self.skill_library.load(args["name"])
@@ -324,3 +381,49 @@ def object_schema(
         "required": required or [],
         "additionalProperties": False,
     }
+
+
+def validate_arguments(schema: dict[str, Any], value: dict[str, Any]) -> str:
+    if not isinstance(value, dict):
+        return "arguments must be a JSON object"
+    allowed = set(schema.get("properties", {}))
+    extra = sorted(set(value) - allowed)
+    if extra and schema.get("additionalProperties") is False:
+        return f"unexpected argument(s): {', '.join(extra)}"
+    missing = [key for key in schema.get("required", []) if key not in value]
+    if missing:
+        return f"missing required argument(s): {', '.join(missing)}"
+    for key, item in value.items():
+        if key in schema.get("properties", {}):
+            error = _validate_value(schema["properties"][key], item, key)
+            if error:
+                return error
+    return ""
+
+
+def _validate_value(schema: dict[str, Any], value: Any, label: str) -> str:
+    expected = schema.get("type")
+    if expected == "string" and not isinstance(value, str):
+        return f"{label} must be a string"
+    if expected == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+        return f"{label} must be an integer"
+    if expected == "boolean" and not isinstance(value, bool):
+        return f"{label} must be a boolean"
+    if expected == "array":
+        if not isinstance(value, list):
+            return f"{label} must be an array"
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                error = _validate_value(item_schema, item, f"{label}[{index}]")
+                if error:
+                    return error
+    if expected == "object":
+        if not isinstance(value, dict):
+            return f"{label} must be an object"
+        nested = validate_arguments(schema, value)
+        return f"{label}.{nested}" if nested else ""
+    enum = schema.get("enum")
+    if enum is not None and value not in enum:
+        return f"{label} must be one of {enum}"
+    return ""
