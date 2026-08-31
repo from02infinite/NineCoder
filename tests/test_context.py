@@ -180,6 +180,7 @@ class ContextManagerTest(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertIn("cached facts", second[2]["content"])
             self.assertIn("retained_tail", cache_path.read_text(encoding="utf-8"))
+            self.assertGreater(manager.compaction_floor, 0)
 
 
 def _compaction_fixture() -> list[dict]:

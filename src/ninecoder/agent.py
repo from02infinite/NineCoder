@@ -136,6 +136,7 @@ class CodingAgent:
             parent.permission_mode,
             new_messages,
             parent_id=parent_id,
+            compaction_floor=parent.compaction_floor,
         )
         self.tools.todos = []
         self.tools.task_graph = []
@@ -350,6 +351,11 @@ class CodingAgent:
             raise RuntimeError("session is not initialized")
         self.session.step = step
         self.session.messages = list(self.messages)
+        if self.context_manager is not None:
+            self.session.compaction_floor = max(
+                self.session.compaction_floor,
+                self.context_manager.compaction_floor,
+            )
         self.session.todos = list(self.tools.todos)
         self.session.task_graph = list(self.tools.task_graph)
         self.session.subagent_tasks = (

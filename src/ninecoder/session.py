@@ -28,6 +28,7 @@ class SessionState:
     stopped_by: str = ""
     summary: str = ""
     step: int = 0
+    compaction_floor: int = 0
     created_at: str = field(default_factory=now_iso)
     updated_at: str = field(default_factory=now_iso)
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -52,6 +53,7 @@ class SessionStore:
         messages: list[dict[str, Any]],
         session_id: str | None = None,
         parent_id: str = "",
+        compaction_floor: int = 0,
     ) -> SessionState:
         state = SessionState(
             id=session_id or new_session_id(),
@@ -59,6 +61,7 @@ class SessionStore:
             workspace=workspace,
             permission_mode=permission_mode,
             parent_id=parent_id,
+            compaction_floor=compaction_floor,
             messages=messages,
         )
         self.save(state)
@@ -94,6 +97,17 @@ class SessionStore:
             json.dumps(asdict(state), ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    def rewind_messages(self, session_id: str, message_count: int) -> SessionState:
+        state = self.load(session_id)
+        if message_count < state.compaction_floor:
+            raise ValueError(
+                "cannot rewind before compaction_floor="
+                f"{state.compaction_floor}"
+            )
+        state.messages = state.messages[:message_count]
+        self.save(state)
+        return state
 
 
 def build_session_tree(

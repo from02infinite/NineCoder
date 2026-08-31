@@ -269,6 +269,29 @@ class SessionTreeTest(unittest.TestCase):
         self.assertEqual(roots, ["orphan"])
         self.assertEqual(children, {})
 
+    def test_rewind_messages_rejects_before_compaction_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp) / "runs" / "sessions")
+            state = store.create(
+                "task",
+                tmp,
+                PermissionMode.AUTO.value,
+                [
+                    {"role": "system", "content": "system"},
+                    {"role": "user", "content": "task"},
+                    {"role": "assistant", "content": "summary"},
+                    {"role": "user", "content": "new"},
+                ],
+                session_id="s-1",
+                compaction_floor=3,
+            )
+
+            with self.assertRaises(ValueError):
+                store.rewind_messages(state.id, 2)
+
+            rewound = store.rewind_messages(state.id, 3)
+            self.assertEqual(len(rewound.messages), 3)
+
 
 class AtomicWriteTest(unittest.TestCase):
     def test_atomic_write_keeps_old_file_if_replace_fails(self) -> None:

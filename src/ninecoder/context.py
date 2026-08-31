@@ -79,6 +79,7 @@ class ContextManager:
         self.max_context_tokens = max_context_tokens
         self.compaction_ratio = compaction_ratio
         self.chars_per_token = DEFAULT_CHARS_PER_TOKEN
+        self.compaction_floor = 0
         self.model = model
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -126,6 +127,7 @@ class ContextManager:
         omitted = flatten_groups(groups[:tail_start])
         tail = flatten_groups(groups[tail_start:])
         boundary = len(head) + len(omitted)
+        self.compaction_floor = max(self.compaction_floor, boundary)
         cache = self._load_compaction_cache()
         summary_text = self._summary_from_cache(cache, messages, boundary)
         if summary_text is None:
@@ -228,6 +230,7 @@ class ContextManager:
         cache = {
             "version": 1,
             "covered_message_count": boundary,
+            "compaction_floor": self.compaction_floor,
             "covered_hash": _messages_hash(messages[:boundary]),
             "summary": summary_text,
             "retained_tail": tail,
