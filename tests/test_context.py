@@ -15,8 +15,10 @@ from ninecoder.model_client import ModelResponse
 class _SummarizeModel:
     def __init__(self, text: str = "condensed facts") -> None:
         self.text = text
+        self.calls = 0
 
     def complete(self, messages: list[dict], tools: list[dict]) -> ModelResponse:
+        self.calls += 1
         return ModelResponse(self.text)
 
 
@@ -148,6 +150,35 @@ class ContextManagerTest(unittest.TestCase):
             after = manager.estimate_messages_tokens(messages)
 
             self.assertLess(after, before)
+
+    def test_compaction_cache_persists_summary_and_retained_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = _SummarizeModel("cached facts")
+            manager = ContextManager(
+                tmp,
+                "runs",
+                "session-1",
+                keep_recent_messages=2,
+                max_context_tokens=1,
+                model=model,
+            )
+
+            first = manager.compact_messages(_compaction_fixture())
+            manager = ContextManager(
+                tmp,
+                "runs",
+                "session-1",
+                keep_recent_messages=2,
+                max_context_tokens=1,
+                model=model,
+            )
+            second = manager.compact_messages(_compaction_fixture())
+
+            cache_path = Path(tmp) / "runs" / "context" / "session-1" / "compaction.json"
+            self.assertEqual(model.calls, 1)
+            self.assertEqual(first, second)
+            self.assertIn("cached facts", second[2]["content"])
+            self.assertIn("retained_tail", cache_path.read_text(encoding="utf-8"))
 
 
 def _compaction_fixture() -> list[dict]:

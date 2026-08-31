@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import hashlib
+import json
 import math
 from pathlib import Path
 import re
@@ -119,10 +121,15 @@ class ContextManager:
         tail_start = tail_start_for(groups, 1 if force else self.keep_recent_messages)
         omitted = flatten_groups(groups[:tail_start])
         tail = flatten_groups(groups[tail_start:])
-        summary_text = self._summarize(
-            omitted,
-            use_model=force or should_compact_for_size,
-        )
+        boundary = len(head) + len(omitted)
+        cache = self._load_compaction_cache()
+        summary_text = self._summary_from_cache(cache, messages, boundary)
+        if summary_text is None:
+            summary_text = self._summarize(
+                omitted,
+                use_model=force or should_compact_for_size,
+            )
+        self._save_compaction_cache(messages, boundary, summary_text, tail)
         summary_path = self.root / "summary.md"
         atomic_write_text(summary_path, summary_text + "\n", encoding="utf-8")
         rel_path = summary_path.relative_to(self.workspace_root)
@@ -172,6 +179,62 @@ class ContextManager:
             # model is unavailable mid-run, fall back to a mechanical summary.
             return summarize_messages(messages)
 
+    def _load_compaction_cache(self) -> dict[str, Any] | None:
+        path = self.root / "compaction.json"
+        if not path.exists():
+            return None
+        try:
+            cache = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return cache if isinstance(cache, dict) else None
+
+    def _summary_from_cache(
+        self,
+        cache: dict[str, Any] | None,
+        messages: list[dict[str, Any]],
+        boundary: int,
+    ) -> str | None:
+        if not cache:
+            return None
+        covered_count = cache.get("covered_message_count")
+        summary = cache.get("summary")
+        covered_hash = cache.get("covered_hash")
+        if (
+            not isinstance(covered_count, int)
+            or not isinstance(summary, str)
+            or not isinstance(covered_hash, str)
+            or covered_count > boundary
+        ):
+            return None
+        if _messages_hash(messages[:covered_count]) != covered_hash:
+            return None
+        if covered_count == boundary:
+            return summary
+        delta = messages[covered_count:boundary]
+        return f"{summary}\n\nNewly compacted messages:\n{summarize_messages(delta)}"
+
+    def _save_compaction_cache(
+        self,
+        messages: list[dict[str, Any]],
+        boundary: int,
+        summary_text: str,
+        tail: list[dict[str, Any]],
+    ) -> None:
+        cache = {
+            "version": 1,
+            "covered_message_count": boundary,
+            "covered_hash": _messages_hash(messages[:boundary]),
+            "summary": summary_text,
+            "retained_tail": tail,
+            "retained_tail_hash": _messages_hash(tail),
+        }
+        atomic_write_text(
+            self.root / "compaction.json",
+            json.dumps(cache, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
 
 def summarize_messages(messages: list[dict[str, Any]]) -> str:
     if not messages:
@@ -220,6 +283,11 @@ def _prompt_tokens(usage: dict[str, Any]) -> int:
         if isinstance(value, int) and value > 0:
             return value
     return 0
+
+
+def _messages_hash(messages: list[dict[str, Any]]) -> str:
+    data = json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
 def summarize_with_model(model: Any, messages: list[dict[str, Any]]) -> str:
