@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from ninecoder.context import compact_messages
+from ninecoder.context import ContextManager, StoredToolOutput, compact_messages
 from ninecoder.hooks import AgentHook, NullHook
 from ninecoder.model_client import ModelResponse
 from ninecoder.permissions import PermissionMode
@@ -60,6 +60,7 @@ class CodingAgent:
         self.session_store = SessionStore(self.runs_root / "sessions")
         self.trajectory = Trajectory(self.runs_root)
         self.session: SessionState | None = None
+        self.context_manager: ContextManager | None = None
 
     def run(self, task: str) -> AgentRun:
         start_step = 0
@@ -86,6 +87,11 @@ class CodingAgent:
                 self.messages,
             )
             self.trajectory = Trajectory(self.runs_root, run_name=self.session.id)
+        self.context_manager = ContextManager(
+            self.workspace.root,
+            self.config.runs_dir,
+            self.session.id,
+        )
         self.trajectory.write(
             "run_start",
             {
@@ -98,7 +104,7 @@ class CodingAgent:
         )
         consecutive_format_errors = 0
         for step in range(start_step + 1, start_step + self.config.max_steps + 1):
-            response = self.model.complete(compact_messages(self.messages), self.tools.schemas())
+            response = self.model.complete(self._model_messages(), self.tools.schemas())
             assistant_message = {
                 "role": "assistant",
                 "content": response.content,
@@ -136,11 +142,12 @@ class CodingAgent:
                 result = self.tools.execute(call.name, call.arguments)
                 for hook in self.hooks:
                     hook.after_tool(call.name, result.content, result.is_error)
+                stored_result = self._store_tool_result(call.id, call.name, result.content)
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": call.id,
                     "name": call.name,
-                    "content": result.content,
+                    "content": stored_result.content_for_model,
                 }
                 self.messages.append(tool_message)
                 self._save_session(step)
@@ -153,6 +160,9 @@ class CodingAgent:
                         "is_error": result.is_error,
                         "terminate": result.terminate,
                         "content": result.content,
+                        "stored_content_path": (
+                            str(stored_result.path) if stored_result.path else ""
+                        ),
                         "metadata": result.metadata,
                     },
                 )
@@ -199,3 +209,18 @@ class CodingAgent:
             self.session.stopped_by = stopped_by
             self.session.summary = summary
         return self.session_store.save(self.session)
+
+    def _model_messages(self) -> list[dict[str, Any]]:
+        if self.context_manager is None:
+            return compact_messages(self.messages)
+        return self.context_manager.compact_messages(self.messages)
+
+    def _store_tool_result(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        content: str,
+    ) -> StoredToolOutput:
+        if self.context_manager is None:
+            return StoredToolOutput(content)
+        return self.context_manager.store_tool_result(tool_call_id, tool_name, content)
