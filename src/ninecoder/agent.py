@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from inspect import signature
 from pathlib import Path
 from typing import Any, Protocol
 
 from ninecoder.context import ContextManager, StoredToolOutput, compact_messages
-from ninecoder.hooks import AgentHook, NullHook
+from ninecoder.hooks import AgentHook, ModelRequest, NullHook, ToolRequest, ToolResponse
 from ninecoder.model_client import ModelResponse
 from ninecoder.permissions import PermissionMode
 from ninecoder.prompts import SYSTEM_PROMPT, no_tool_retry, task_prompt
 from ninecoder.session import SessionState, SessionStore
-from ninecoder.tools import ToolRegistry
+from ninecoder.tools import ToolRegistry, ToolResult
 from ninecoder.trajectory import Trajectory
 from ninecoder.workspace import Workspace
 
@@ -104,7 +105,11 @@ class CodingAgent:
         )
         consecutive_format_errors = 0
         for step in range(start_step + 1, start_step + self.config.max_steps + 1):
-            response = self.model.complete(self._model_messages(), self.tools.schemas())
+            model_request = self._before_model(
+                ModelRequest(self._model_messages(), self.tools.schemas())
+            )
+            response = self.model.complete(model_request.messages, model_request.tools)
+            response = self._after_model(response)
             assistant_message = {
                 "role": "assistant",
                 "content": response.content,
@@ -137,16 +142,18 @@ class CodingAgent:
                 continue
             consecutive_format_errors = 0
             for call in response.tool_calls:
-                for hook in self.hooks:
-                    hook.before_tool(call.name, call.arguments)
-                result = self.tools.execute(call.name, call.arguments)
-                for hook in self.hooks:
-                    hook.after_tool(call.name, result.content, result.is_error)
-                stored_result = self._store_tool_result(call.id, call.name, result.content)
+                tool_request = self._before_tool(ToolRequest(call.name, call.arguments))
+                result = self.tools.execute(tool_request.name, tool_request.arguments)
+                result = self._after_tool(tool_request.name, result)
+                stored_result = self._store_tool_result(
+                    call.id,
+                    tool_request.name,
+                    result.content,
+                )
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": call.id,
-                    "name": call.name,
+                    "name": tool_request.name,
                     "content": stored_result.content_for_model,
                 }
                 self.messages.append(tool_message)
@@ -155,8 +162,8 @@ class CodingAgent:
                     "tool_result",
                     {
                         "step": step,
-                        "tool": call.name,
-                        "arguments": call.arguments,
+                        "tool": tool_request.name,
+                        "arguments": tool_request.arguments,
                         "is_error": result.is_error,
                         "terminate": result.terminate,
                         "content": result.content,
@@ -168,7 +175,9 @@ class CodingAgent:
                 )
                 if result.terminate:
                     for hook in self.hooks:
-                        hook.on_finish(result.content)
+                        method = getattr(hook, "on_finish", None)
+                        if method is not None:
+                            method(result.content)
                     return self._stop(result.content, step, "finished")
         return self._stop(
             f"Reached max_steps={self.config.max_steps} before finish.",
@@ -215,6 +224,74 @@ class CodingAgent:
             return compact_messages(self.messages)
         return self.context_manager.compact_messages(self.messages)
 
+    def _before_model(self, request: ModelRequest) -> ModelRequest:
+        for hook in self.hooks:
+            method = getattr(hook, "before_model", None)
+            if method is None:
+                continue
+            updated = method(request)
+            if isinstance(updated, ModelRequest):
+                request = updated
+        return request
+
+    def _after_model(self, response: ModelResponse) -> ModelResponse:
+        for hook in self.hooks:
+            method = getattr(hook, "after_model", None)
+            if method is None:
+                continue
+            updated = method(response)
+            if isinstance(updated, ModelResponse):
+                response = updated
+        return response
+
+    def _before_tool(self, request: ToolRequest) -> ToolRequest:
+        for hook in self.hooks:
+            method = getattr(hook, "before_tool", None)
+            if method is None:
+                continue
+            if _expects_one_argument(method):
+                updated = method(request)
+            else:
+                updated = method(request.name, request.arguments)
+            if isinstance(updated, ToolRequest):
+                request = updated
+            elif isinstance(updated, tuple) and len(updated) == 2:
+                name, arguments = updated
+                if isinstance(name, str) and isinstance(arguments, dict):
+                    request = ToolRequest(name, arguments)
+        return request
+
+    def _after_tool(self, tool_name: str, result: ToolResult) -> ToolResult:
+        response = ToolResponse(
+            content=result.content,
+            is_error=result.is_error,
+            terminate=result.terminate,
+            metadata=result.metadata,
+        )
+        for hook in self.hooks:
+            method = getattr(hook, "after_tool", None)
+            if method is None:
+                continue
+            if _expects_one_argument(method):
+                updated = method(response)
+            else:
+                updated = method(tool_name, response.content, response.is_error)
+            if isinstance(updated, ToolResponse):
+                response = updated
+            elif isinstance(updated, str):
+                response = ToolResponse(
+                    content=updated,
+                    is_error=response.is_error,
+                    terminate=response.terminate,
+                    metadata=response.metadata,
+                )
+        return ToolResult(
+            content=response.content,
+            metadata=response.metadata,
+            is_error=response.is_error,
+            terminate=response.terminate,
+        )
+
     def _store_tool_result(
         self,
         tool_call_id: str,
@@ -224,3 +301,10 @@ class CodingAgent:
         if self.context_manager is None:
             return StoredToolOutput(content)
         return self.context_manager.store_tool_result(tool_call_id, tool_name, content)
+
+
+def _expects_one_argument(method: Any) -> bool:
+    try:
+        return len(signature(method).parameters) == 1
+    except (TypeError, ValueError):
+        return True
