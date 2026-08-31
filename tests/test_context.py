@@ -6,6 +6,7 @@ from ninecoder.context import (
     ContextManager,
     compact_messages,
     estimate_messages_tokens,
+    extract_summary_text,
     summarize_messages,
     summarize_with_model,
 )
@@ -207,6 +208,22 @@ class ModelSummaryTest(unittest.TestCase):
         )
 
         self.assertEqual(summary, "condensed facts")
+
+    def test_summarize_with_model_extracts_summary_tag(self) -> None:
+        summary = summarize_with_model(
+            _SummarizeModel("<analysis>ignore me</analysis><summary>safe facts</summary>"),
+            [{"role": "user", "content": "hi"}],
+        )
+
+        self.assertEqual(summary, "safe facts")
+
+    def test_extract_summary_text_strips_analysis_blocks(self) -> None:
+        summary = extract_summary_text(
+            "<summary>keep this <analysis>not this</analysis></summary>",
+            "fallback",
+        )
+
+        self.assertEqual(summary, "keep this")
 
     def test_summarize_with_model_falls_back_on_empty_content(self) -> None:
         summary = summarize_with_model(
