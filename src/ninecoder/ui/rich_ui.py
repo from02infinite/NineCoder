@@ -14,9 +14,11 @@ such as ``[debug]`` or ``pytest [1]`` can never be parsed as style tags.
 from __future__ import annotations
 
 import sys
+import time
 from typing import Any
 
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
@@ -36,6 +38,11 @@ from ninecoder.ui.components import (
 )
 
 _PROMPT = [("class:prompt", "> ")]
+
+# Cap on how often the streaming Live region repaints, in seconds (~20 Hz).
+# Keeps redraw cost flat regardless of token burst size; the final render on
+# assistant_stream_end always repaints once more.
+_STREAM_THROTTLE = 0.05
 
 _STYLE = Style.from_dict(
     {
@@ -57,6 +64,8 @@ class RichUI(AgentUI):
         super().__init__(context)
         self.console = Console(stderr=True, soft_wrap=True, highlight=False)
         self._stream_buffer: list[str] = []
+        self._stream_live: Live | None = None
+        self._stream_last_render = 0.0
 
         key_bindings = KeyBindings()
 
@@ -112,16 +121,28 @@ class RichUI(AgentUI):
         self.console.print(Markdown(text))
 
     def assistant_stream_chunk(self, chunk: str) -> None:
-        # Buffer the tokens rather than print them raw: streaming raw Markdown
-        # source would flash `**`/`#`/link syntax to the terminal. Rich renders
-        # the accumulated block as Markdown once the message finishes, keeping
-        # the same quality as the non-streaming path (tool progress stays live).
+        # Render the accumulated text live instead of buffering until the
+        # message finishes. Repainting is throttled (see _STREAM_THROTTLE) so a
+        # burst of tokens collapses into a few redraws, and _render_streaming
+        # degrades to plain Text while an unclosed fenced code block would
+        # otherwise swallow the rest of the Markdown.
         self._stream_buffer.append(chunk)
+        if self._stream_live is None:
+            self._stream_live = Live(Text(""), console=self.console, auto_refresh=False)
+            self._stream_live.start()
+        now = time.monotonic()
+        if now - self._stream_last_render >= _STREAM_THROTTLE:
+            self._stream_last_render = now
+            self._stream_live.update(_render_streaming(self._stream_buffer), refresh=True)
 
     def assistant_stream_end(self) -> None:
         text = "".join(self._stream_buffer)
         self._stream_buffer = []
-        if text.strip():
+        if self._stream_live is not None:
+            self._stream_live.update(Markdown(text) if text.strip() else Text(""), refresh=True)
+            self._stream_live.stop()
+            self._stream_live = None
+        elif text.strip():
             self.console.print(Markdown(text))
 
     def session_history(self, messages: list[dict[str, Any]]) -> None:
@@ -276,3 +297,25 @@ def _visible_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _first_line(text: str, limit: int = 100) -> str:
     first = (text.strip().splitlines() or [""])[0]
     return first if len(first) <= limit else f"{first[: limit - 3]}..."
+
+
+def _render_streaming(buffer: list[str]) -> Markdown | Text:
+    """Render the in-flight stream text, degrading to plain ``Text`` while an
+    unclosed fenced code block would make ``Markdown`` swallow the tail."""
+    text = "".join(buffer)
+    if _in_unclosed_fence(text):
+        return Text(text)
+    return Markdown(text)
+
+
+def _in_unclosed_fence(text: str) -> bool:
+    """True if ``text`` ends inside an unclosed ```/~~~ fenced code block."""
+    fence: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if fence is None:
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                fence = stripped[:3]
+        elif stripped.startswith(fence):
+            fence = None
+    return fence is not None

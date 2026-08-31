@@ -3,8 +3,12 @@ import unittest
 from dataclasses import dataclass, field
 from typing import Any
 
+from rich.markdown import Markdown
+from rich.text import Text
+
 from ninecoder.tools import ToolResult
 from ninecoder.ui import NullUI, PlainUI, UiContext, make_ui
+from ninecoder.ui.rich_ui import _in_unclosed_fence, _render_streaming
 from ninecoder.ui.components import (
     elapsed_human,
     format_args,
@@ -159,6 +163,38 @@ class InfoTest(unittest.TestCase):
     def test_null_ui_info_is_noop(self) -> None:
         # base AgentUI.info is a no-op; NullUI inherits it, so this must not raise.
         NullUI().info("ignored")
+
+
+class UnclosedFenceTest(unittest.TestCase):
+    def test_no_fence(self) -> None:
+        self.assertFalse(_in_unclosed_fence("plain text\nmore text"))
+
+    def test_closed_backtick_fence(self) -> None:
+        self.assertFalse(_in_unclosed_fence("```python\nprint(1)\n```"))
+
+    def test_open_backtick_fence(self) -> None:
+        self.assertTrue(_in_unclosed_fence("```python\nprint(1)"))
+
+    def test_open_backtick_fence_with_info_string(self) -> None:
+        self.assertTrue(_in_unclosed_fence("```\ncode"))
+
+    def test_tilde_fence(self) -> None:
+        self.assertTrue(_in_unclosed_fence("~~~\ncode"))
+        self.assertFalse(_in_unclosed_fence("~~~\ncode\n~~~"))
+
+    def test_fence_reopens_after_close(self) -> None:
+        self.assertTrue(_in_unclosed_fence("```\na\n```\n```\nb"))
+
+
+class RenderStreamingTest(unittest.TestCase):
+    def test_plain_text_renders_as_markdown(self) -> None:
+        self.assertIsInstance(_render_streaming(["**bold**"]), Markdown)
+
+    def test_unclosed_fence_degrades_to_text(self) -> None:
+        self.assertIsInstance(_render_streaming(["```python\nprint(1)"]), Text)
+
+    def test_closed_fence_returns_to_markdown(self) -> None:
+        self.assertIsInstance(_render_streaming(["```python\nprint(1)\n```"]), Markdown)
 
 
 if __name__ == "__main__":
