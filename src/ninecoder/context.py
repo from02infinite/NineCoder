@@ -12,6 +12,12 @@ TOOL_INLINE_CHARS = 2400
 KEEP_RECENT_MESSAGES = 18
 SUMMARY_PREVIEW_CHARS = 240
 
+_SUMMARY_SYSTEM = (
+    "You condense a coding-agent conversation for context compaction. "
+    "Preserve concrete facts: files read or edited, commands run and their "
+    "results, decisions made, and outstanding work. Be concise."
+)
+
 
 def compact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if len(messages) <= KEEP_RECENT_MESSAGES + 2:
@@ -48,11 +54,13 @@ class ContextManager:
         *,
         keep_recent_messages: int = KEEP_RECENT_MESSAGES,
         max_tool_chars: int = MAX_TOOL_CHARS,
+        model: Any | None = None,
     ):
         self.workspace_root = Path(workspace_root)
         self.root = self.workspace_root / runs_dir / "context" / session_id
         self.keep_recent_messages = keep_recent_messages
         self.max_tool_chars = max_tool_chars
+        self.model = model
         self.root.mkdir(parents=True, exist_ok=True)
 
     def store_tool_result(
@@ -89,7 +97,7 @@ class ContextManager:
         tail_start = tail_start_for(groups, self.keep_recent_messages)
         omitted = flatten_groups(groups[:tail_start])
         tail = flatten_groups(groups[tail_start:])
-        summary_text = summarize_messages(omitted)
+        summary_text = self._summarize(omitted)
         summary_path = self.root / "summary.md"
         summary_path.write_text(summary_text + "\n", encoding="utf-8")
         rel_path = summary_path.relative_to(self.workspace_root)
@@ -106,6 +114,16 @@ class ContextManager:
             _compact_message(message, self.max_tool_chars)
             for message in compacted
         ]
+
+    def _summarize(self, messages: list[dict[str, Any]]) -> str:
+        if self.model is None:
+            return summarize_messages(messages)
+        try:
+            return summarize_with_model(self.model, messages)
+        except Exception:
+            # A summary call is a nicety, not a correctness requirement. If the
+            # model is unavailable mid-run, fall back to a mechanical summary.
+            return summarize_messages(messages)
 
 
 def summarize_messages(messages: list[dict[str, Any]]) -> str:
@@ -124,6 +142,23 @@ def summarize_messages(messages: list[dict[str, Any]]) -> str:
             content = content[:SUMMARY_PREVIEW_CHARS] + "..."
         lines.append(f"- {index}. {label}: {content or '(no text)'}")
     return "\n".join(lines)
+
+
+def summarize_with_model(model: Any, messages: list[dict[str, Any]]) -> str:
+    """Ask the model to condense older messages, with a mechanical fallback."""
+    transcript = summarize_messages(messages)
+    response = model.complete(
+        [
+            {"role": "system", "content": _SUMMARY_SYSTEM},
+            {
+                "role": "user",
+                "content": f"Summarize this older conversation:\n\n{transcript}",
+            },
+        ],
+        [],
+    )
+    content = (getattr(response, "content", "") or "").strip()
+    return content or summarize_messages(messages)
 
 
 def _compact_message(message: dict[str, Any], max_tool_chars: int = MAX_TOOL_CHARS) -> dict[str, Any]:

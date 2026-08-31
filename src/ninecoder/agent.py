@@ -108,6 +108,7 @@ class CodingAgent:
             self.workspace.root,
             self.config.runs_dir,
             self.session.id,
+            model=self.model,
         )
         self.trajectory.write(
             "run_start",

@@ -2,7 +2,26 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ninecoder.context import ContextManager, compact_messages, summarize_messages
+from ninecoder.context import (
+    ContextManager,
+    compact_messages,
+    summarize_messages,
+    summarize_with_model,
+)
+from ninecoder.model_client import ModelResponse
+
+
+class _SummarizeModel:
+    def __init__(self, text: str = "condensed facts") -> None:
+        self.text = text
+
+    def complete(self, messages: list[dict], tools: list[dict]) -> ModelResponse:
+        return ModelResponse(self.text)
+
+
+class _FailingModel:
+    def complete(self, messages: list[dict], tools: list[dict]) -> ModelResponse:
+        raise RuntimeError("boom")
 
 
 class ContextManagerTest(unittest.TestCase):
@@ -112,6 +131,71 @@ class ContextManagerTest(unittest.TestCase):
         )
 
         self.assertIn("tool_calls=1", summary)
+
+
+def _compaction_fixture() -> list[dict]:
+    return [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "older assistant"},
+        {
+            "role": "assistant",
+            "content": "recent assistant",
+            "tool_calls": [{"id": "call_1"}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "name": "finish",
+            "content": "recent tool",
+        },
+    ]
+
+
+class ModelSummaryTest(unittest.TestCase):
+    def test_summarize_with_model_returns_model_text(self) -> None:
+        summary = summarize_with_model(
+            _SummarizeModel("condensed facts"), [{"role": "user", "content": "hi"}]
+        )
+
+        self.assertEqual(summary, "condensed facts")
+
+    def test_summarize_with_model_falls_back_on_empty_content(self) -> None:
+        summary = summarize_with_model(
+            _SummarizeModel(""), [{"role": "user", "content": "hi"}]
+        )
+
+        self.assertIn("Older conversation summary", summary)
+
+    def test_compaction_uses_model_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = ContextManager(
+                tmp,
+                "runs",
+                "session-1",
+                keep_recent_messages=2,
+                model=_SummarizeModel("condensed facts"),
+            )
+
+            compacted = manager.compact_messages(_compaction_fixture())
+
+            self.assertIn("condensed facts", compacted[2]["content"])
+            summary_file = Path(tmp) / "runs" / "context" / "session-1" / "summary.md"
+            self.assertIn("condensed facts", summary_file.read_text(encoding="utf-8"))
+
+    def test_compaction_falls_back_when_model_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = ContextManager(
+                tmp,
+                "runs",
+                "session-1",
+                keep_recent_messages=2,
+                model=_FailingModel(),
+            )
+
+            compacted = manager.compact_messages(_compaction_fixture())
+
+            self.assertIn("older assistant", compacted[2]["content"])
 
 
 if __name__ == "__main__":
