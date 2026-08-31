@@ -8,7 +8,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ninecoder.context import ContextManager, StoredToolOutput, compact_messages
-from ninecoder.hooks import AgentHook, ModelRequest, NullHook, ToolRequest, ToolResponse
+from ninecoder.hooks import (
+    AgentHook,
+    AgentStartRequest,
+    ModelRequest,
+    NullHook,
+    StopEvent,
+    ToolDecision,
+    ToolRequest,
+    ToolResponse,
+)
 from ninecoder.memory import MemoryStore, extract_facts, memory_block
 from ninecoder.model_client import ModelResponse
 from ninecoder.permissions import PermissionMode
@@ -178,6 +187,15 @@ class CodingAgent:
                 ).read().strip()
                 if memory:
                     system_content += "\n\n" + memory_block(memory)
+            start_request = self._before_agent_start(
+                AgentStartRequest(
+                    task,
+                    str(self.workspace.root),
+                    self.config.test_cmd,
+                    system_content,
+                )
+            )
+            system_content = start_request.system_prompt
             self.messages = [
                 {"role": "system", "content": system_content},
                 {
@@ -271,11 +289,21 @@ class CodingAgent:
                 continue
             consecutive_format_errors = 0
             for call in response.tool_calls:
-                tool_request = self._before_tool(ToolRequest(call.name, call.arguments))
+                tool_decision = self._before_tool(ToolRequest(call.name, call.arguments))
+                tool_request = tool_decision.request or ToolRequest(call.name, call.arguments)
                 self.ui.debug(f"tool={tool_request.name} {_compact_args(tool_request.arguments)}")
                 self.ui.tool_started(tool_request.name, tool_request.arguments)
                 tool_started_at = time.perf_counter()
-                result = self.tools.execute(tool_request.name, tool_request.arguments)
+                if tool_decision.blocked_result is None:
+                    result = self.tools.execute(tool_request.name, tool_request.arguments)
+                else:
+                    blocked = tool_decision.blocked_result
+                    result = ToolResult(
+                        blocked.content,
+                        metadata=blocked.metadata,
+                        is_error=blocked.is_error,
+                        terminate=blocked.terminate,
+                    )
                 elapsed_ms = (time.perf_counter() - tool_started_at) * 1000
                 result = self._after_tool(tool_request.name, result)
                 status = "error" if result.is_error else "ok"
@@ -312,10 +340,6 @@ class CodingAgent:
                     },
                 )
                 if result.terminate:
-                    for hook in self.hooks:
-                        method = getattr(hook, "on_finish", None)
-                        if method is not None:
-                            method(result.content)
                     return self._stop(result.content, step, "finished")
         return self._stop(
             f"Reached max_steps={self.config.max_steps} before finish.",
@@ -324,6 +348,7 @@ class CodingAgent:
         )
 
     def _stop(self, summary: str, steps: int, stopped_by: str) -> AgentRun:
+        self._notify_stop(summary, steps, stopped_by)
         self.ui.session_finished(summary=summary, steps=steps, stopped_by=stopped_by)
         session_path = self._save_session(steps, summary=summary, stopped_by=stopped_by)
         self._remember(summary)
@@ -392,6 +417,16 @@ class CodingAgent:
             return compact_messages(self.messages)
         return self.context_manager.compact_messages(self.messages)
 
+    def _before_agent_start(self, request: AgentStartRequest) -> AgentStartRequest:
+        for hook in self.hooks:
+            method = getattr(hook, "before_agent_start", None)
+            if method is None:
+                continue
+            updated = method(request)
+            if isinstance(updated, AgentStartRequest):
+                request = updated
+        return request
+
     def _before_model(self, request: ModelRequest) -> ModelRequest:
         for hook in self.hooks:
             method = getattr(hook, "before_model", None)
@@ -412,7 +447,7 @@ class CodingAgent:
                 response = updated
         return response
 
-    def _before_tool(self, request: ToolRequest) -> ToolRequest:
+    def _before_tool(self, request: ToolRequest) -> ToolDecision:
         for hook in self.hooks:
             method = getattr(hook, "before_tool", None)
             if method is None:
@@ -423,11 +458,16 @@ class CodingAgent:
                 updated = method(request.name, request.arguments)
             if isinstance(updated, ToolRequest):
                 request = updated
+            elif isinstance(updated, ToolDecision):
+                if updated.request is not None:
+                    request = updated.request
+                if updated.blocked_result is not None:
+                    return ToolDecision(request, updated.blocked_result)
             elif isinstance(updated, tuple) and len(updated) == 2:
                 name, arguments = updated
                 if isinstance(name, str) and isinstance(arguments, dict):
                     request = ToolRequest(name, arguments)
-        return request
+        return ToolDecision(request)
 
     def _after_tool(self, tool_name: str, result: ToolResult) -> ToolResult:
         response = ToolResponse(
@@ -469,6 +509,17 @@ class CodingAgent:
         if self.context_manager is None:
             return StoredToolOutput(content)
         return self.context_manager.store_tool_result(tool_call_id, tool_name, content)
+
+    def _notify_stop(self, summary: str, steps: int, stopped_by: str) -> None:
+        event = StopEvent(summary, steps, stopped_by)
+        for hook in self.hooks:
+            method = getattr(hook, "on_stop", None)
+            if method is not None:
+                method(event)
+            if stopped_by == "finished":
+                legacy_method = getattr(hook, "on_finish", None)
+                if legacy_method is not None:
+                    legacy_method(summary)
 
 
 def _expects_one_argument(method: Any) -> bool:

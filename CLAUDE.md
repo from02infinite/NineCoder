@@ -58,7 +58,7 @@ Module map (in `src/ninecoder/`):
 - `context.py` — context compaction. `ContextManager` writes a `summary.md` and offloads oversized tool outputs to files under `runs/context/<session>/`; `compact_messages` is the in-memory fallback. Message grouping must keep an assistant `tool_calls` message together with its following `tool` messages (`valid_model_messages`).
 - `session.py` — resumable `SessionState`, persisted as JSON at `runs/sessions/<id>/session.json`.
 - `trajectory.py` — append-only JSONL run record at `runs/<id>.jsonl`.
-- `hooks.py` — `AgentHook` protocol (`before_model`/`after_model`/`before_tool`/`after_tool`/`on_finish`). Tool hooks may use the new single-arg (`ToolRequest`/`ToolResponse`) or legacy multi-arg signature; `agent._expects_one_argument` disambiguates.
+- `hooks.py` — `AgentHook` protocol (`before_agent_start`/`before_model`/`after_model`/`before_tool`/`after_tool`/`on_stop`/`on_finish`). Tool hooks may use the new single-arg (`ToolRequest`/`ToolResponse`) or legacy multi-arg signature; `agent._expects_one_argument` disambiguates. `ToolDecision.blocked_result` lets a hook skip execution and return a synthetic tool result.
 - `subagents.py` — read-only subagents via `SubagentTaskRunner`; tasks carry id/role/status and are persisted into the session.
 - `skills.py` — on-demand markdown skills loaded from `skills/*.md`.
 - `mcp_like.py` — `LocalCapabilityRouter` exposes `tools/list` and `tools/call` over the same registry.
@@ -69,4 +69,4 @@ Module map (in `src/ninecoder/`):
 
 - Model access is behind the `ChatModel` Protocol (a `complete(messages, tools)` method), so tests inject a fake model.
 - Tool execution path: `ToolRegistry.execute` validates JSON args → evaluates permission → calls the handler → catches exceptions into `ToolResult(is_error=True)`.
-- Every model/tool interaction passes through hooks, which may inspect or rewrite the request/response (returning `None` leaves it unchanged).
+- Every startup/model/tool interaction passes through hooks, which may inspect or rewrite the request/response (returning `None` leaves it unchanged). Stop notifications are emitted from `_stop` for both normal and abnormal termination.

@@ -84,5 +84,5 @@ dangerous-command blocklist plus timeouts are the only guardrails, so a model in
 - Context compaction by recent-window retention, summary files, and stored long tool outputs
 - JSONL trajectory persistence
 - MCP-like local capability router with `tools/list` and `tools/call`
-- Hook points that can inspect or rewrite model requests, model responses, tool calls, tool results, and finish events
+- Hook points that can inspect or rewrite agent startup, model requests, model responses, tool calls, tool results, and stop events; tool hooks can also block execution with a synthetic result
 - Permission governance with `plan`, `ask`, and `auto`
