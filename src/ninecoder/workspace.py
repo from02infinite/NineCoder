@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ninecoder.errors import PermissionDenied, ToolError
 from ninecoder.permissions import hits_sensitive_path
+from ninecoder.sandbox import NullSandbox, SandboxBackend
 
 
 MAX_READ_LINES = 400
@@ -97,9 +98,17 @@ class CommandResult:
 
 
 class Workspace:
-    def __init__(self, root: str | Path):
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        sandbox: SandboxBackend | None = None,
+        allow_network: bool = False,
+    ):
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self.sandbox = sandbox or NullSandbox()
+        self.allow_network = allow_network
 
     def resolve(self, path: str | Path = ".") -> Path:
         raw = Path(path).expanduser()
@@ -190,6 +199,9 @@ class Workspace:
         return self._diff(path, content, updated)
 
     def search(self, pattern: str, path: str = ".", include: str = "") -> str:
+        # ``rg`` is deliberately not sandboxed: it is a fixed read-only binary
+        # invoked with a validated pattern/path, so the risk surface is low and
+        # sandboxing it would add failure modes for no real gain.
         target = self.resolve(path)
         if shutil.which("rg"):
             args = ["rg", "--line-number", "--no-heading", "--color", "never"]
@@ -215,16 +227,32 @@ class Workspace:
             raise ToolError("command must not be empty")
         if _is_blocked_command(command):
             raise PermissionDenied(f"blocked shell command: {command}")
-        proc = subprocess.Popen(
-            command,
-            cwd=self.root,
-            shell=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            env=os.environ | {"PAGER": "cat", "GIT_PAGER": "cat", "LESS": "-R"},
-            start_new_session=os.name == "posix",
-        )
+        env = os.environ | {"PAGER": "cat", "GIT_PAGER": "cat", "LESS": "-R"}
+        if self.sandbox.available():
+            wrapped = self.sandbox.wrap(
+                command, self.root, allow_network=self.allow_network
+            )
+            proc = subprocess.Popen(
+                wrapped.argv,
+                cwd=self.root,
+                shell=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=os.name == "posix",
+            )
+        else:
+            proc = subprocess.Popen(
+                command,
+                cwd=self.root,
+                shell=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=os.name == "posix",
+            )
         try:
             stdout, _ = proc.communicate(timeout=max(1, min(timeout, 300)))
             return CommandResult(self._truncate(stdout), proc.returncode)

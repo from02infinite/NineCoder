@@ -82,6 +82,8 @@ class RichUI(AgentUI):
         self.console.print(f"Workspace:  {self.context.workspace}", markup=False)
         self.console.print(f"Model:      {self.context.model}", markup=False)
         self.console.print(f"Permission: {self.context.permission}", markup=False)
+        if self.context.sandbox:
+            self.console.print(f"Sandbox:    {self.context.sandbox}", markup=False)
         if self.context.test_cmd:
             self.console.print(f"Test:       {self.context.test_cmd}", markup=False)
         self.console.print()

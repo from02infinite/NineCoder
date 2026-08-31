@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -11,6 +12,7 @@ from ninecoder.config import ModelConfig
 from ninecoder.model_client import ModelClient
 from ninecoder.permissions import PermissionMode
 from ninecoder.repl import REPL_HELP, format_session_list, format_session_tree, parse_command
+from ninecoder.sandbox import detect_sandbox, sandbox_description
 from ninecoder.session import SessionState, SessionStore
 from ninecoder.ui import UiContext, make_ui
 from ninecoder.workspace import Workspace
@@ -104,6 +106,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=32000,
         help="Approximate model context window for compaction decisions (default: 32000)",
     )
+    run_options.add_argument(
+        "--sandbox",
+        default=None,
+        choices=["auto", "off", "bwrap", "sandbox-exec"],
+        metavar="BACKEND",
+        help=(
+            "OS sandbox for run_shell: auto (detect bwrap/sandbox-exec, default), "
+            "off, bwrap, or sandbox-exec (env: NINECODER_SANDBOX)"
+        ),
+    )
+    run_options.add_argument(
+        "--allow-network",
+        action="store_true",
+        help="Allow network access inside the sandbox (blocked by default)",
+    )
 
     model_options = parser.add_argument_group("model options")
     model_options.add_argument(
@@ -182,7 +199,12 @@ def main(argv: list[str] | None = None) -> int:
             temperature=args.temperature,
             max_tokens=args.max_tokens,
         )
-        workspace = Workspace(Path(args.workspace))
+        sandbox = detect_sandbox(args.sandbox or os.getenv("NINECODER_SANDBOX") or "auto")
+        workspace = Workspace(
+            Path(args.workspace),
+            sandbox=sandbox,
+            allow_network=args.allow_network,
+        )
     except Exception as exc:
         if args.json:
             print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
@@ -190,7 +212,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    ui = _build_ui(args, model_config, workspace, interactive)
+    ui = _build_ui(
+        args,
+        model_config,
+        workspace,
+        interactive,
+        sandbox_description(sandbox, args.allow_network),
+    )
 
     if repl_mode:
         return _run_repl(ui, model_config, workspace, args)
@@ -229,6 +257,7 @@ def _build_ui(
     model_config: ModelConfig,
     workspace: Workspace,
     interactive: bool,
+    sandbox: str = "",
 ) -> object:
     if args.json or args.quiet:
         mode = "null"
@@ -244,6 +273,7 @@ def _build_ui(
         permission=args.permission,
         test_cmd=args.test_cmd,
         debug=bool(args.debug),
+        sandbox=sandbox,
     )
     return make_ui(mode=mode, context=context)
 

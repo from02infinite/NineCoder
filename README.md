@@ -59,6 +59,7 @@ Useful environment variables:
 - `NINECODER_BASE_URL` or `DEEPSEEK_BASE_URL`
 - `NINECODER_MODEL`
 - `NINECODER_MAX_RETRIES` (transient model-error retries, default `3`)
+- `NINECODER_SANDBOX` (sandbox backend, default `auto`)
 
 ## Safety
 
@@ -67,10 +68,22 @@ workspace, sensitive paths (`.env*`, SSH/AWS/GCP keys and directories) are
 denied, shell commands have timeouts, and permission mode can be `plan`, `ask`,
 or `auto`.
 
-`run_shell` is **not** an OS-level sandbox: commands run as your user and a
-dangerous-command blocklist plus timeouts are the only guardrails, so a model in
-`auto` mode can still read or modify files outside the workspace. Use
-`--permission ask` (or an OS sandbox) when the model handles untrusted input.
+`run_shell` runs inside an OS sandbox by default (`--sandbox auto`): it auto-
+detects `bwrap` (Linux, full-strength) or `sandbox-exec` (macOS, deprecated and
+best-effort), and falls back to no sandbox with a banner note when neither is
+installed. The sandbox makes the filesystem read-only except the workspace and
+`/tmp`, gives the command fresh namespaces, and **blocks network access by
+default** — pass `--allow-network` for commands that need it (e.g. `pip install`,
+`git clone`). Explicit backends are `--sandbox bwrap` / `--sandbox sandbox-exec`;
+`--sandbox off` disables it entirely.
+
+The sandbox is filesystem + process + network isolation, not a full secret
+container: a sandboxed command can still *read* `~/.ssh` and friends (it just
+cannot send the content out while network is blocked), and `sandbox-exec` is a
+deprecated Apple shim whose profile semantics are weaker than bubblewrap. The
+sensitive-path denial and `--permission ask` remain the defense for read access.
+When the model handles untrusted input, prefer `--permission ask` on top of the
+sandbox.
 
 ## Implemented Agent Features
 
@@ -86,3 +99,4 @@ dangerous-command blocklist plus timeouts are the only guardrails, so a model in
 - MCP-like local capability router with `tools/list` and `tools/call`
 - Hook points that can inspect or rewrite agent startup, model requests, model responses, tool calls, tool results, and stop events; tool hooks can also block execution with a synthetic result
 - Permission governance with `plan`, `ask`, and `auto`
+- Pluggable OS sandbox for `run_shell` (bubblewrap / sandbox-exec), network-blocked by default

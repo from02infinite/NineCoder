@@ -23,6 +23,7 @@ class UiContext:
     permission: str = "ask"
     test_cmd: str = ""
     debug: bool = False
+    sandbox: str = ""
 
 
 class AgentUI:

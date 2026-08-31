@@ -39,6 +39,8 @@ class PlainUI(AgentUI):
         self._emit(f"Workspace: {self.context.workspace}")
         self._emit(f"Model: {self.context.model}")
         self._emit(f"Permission: {self.context.permission}")
+        if self.context.sandbox:
+            self._emit(f"Sandbox: {self.context.sandbox}")
         if self.context.test_cmd:
             self._emit(f"Test: {self.context.test_cmd}")
         if resumed:
