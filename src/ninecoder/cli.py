@@ -323,6 +323,7 @@ def _run_repl(
                     session = agent.open_session()
                     head_id = session.id
                     fork_from = ""
+                    ui.session_history(agent.messages)
                     ui.info(f"Resumed session {session.id}. Continue with your next message.")
                     continue
                 if verb == "compact":

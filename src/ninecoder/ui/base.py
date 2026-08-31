@@ -54,6 +54,9 @@ class AgentUI:
     def assistant_stream_chunk(self, chunk: str) -> None:
         """A streaming token. Reserved for future streaming support."""
 
+    def session_history(self, messages: list[dict[str, Any]]) -> None:
+        """Show messages loaded from a resumed session."""
+
     # -- model -------------------------------------------------------------
     def model_started(self) -> None:
         """A model request is about to be issued."""

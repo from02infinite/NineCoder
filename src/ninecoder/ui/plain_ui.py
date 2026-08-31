@@ -63,6 +63,36 @@ class PlainUI(AgentUI):
     def assistant_stream_chunk(self, chunk: str) -> None:
         print(chunk, end="", file=self.stream, flush=True)
 
+    def session_history(self, messages: list[dict[str, Any]]) -> None:
+        visible = [message for message in messages if message.get("role") != "system"]
+        if not visible:
+            return
+        self._emit("Session history:")
+        for message in visible:
+            role = str(message.get("role", ""))
+            content = str(message.get("content", "") or "")
+            if role == "user":
+                self._emit(f"> {content}")
+            elif role == "assistant":
+                if content.strip():
+                    for line in content.strip().splitlines():
+                        self._emit(line)
+                tool_calls = message.get("tool_calls") or []
+                if tool_calls:
+                    names = [
+                        str(call.get("function", {}).get("name", "tool"))
+                        for call in tool_calls
+                        if isinstance(call, dict)
+                    ]
+                    self._emit(f"  Tool calls: {', '.join(names)}")
+            elif role == "tool":
+                name = str(message.get("name", "tool"))
+                first = (content.strip().splitlines() or [""])[0]
+                if len(first) > 100:
+                    first = f"{first[:97]}..."
+                self._emit(f"  {name}: {first}")
+        self._emit()
+
     def model_started(self) -> None:
         return None
 

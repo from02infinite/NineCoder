@@ -161,9 +161,11 @@ class CodingAgent:
         return self._loop()
 
     def _start(self, task: str) -> None:
+        resumed = False
         if self.config.resume_session:
             self.open_session()
             task = self.session.task
+            resumed = True
         else:
             system_content = SYSTEM_PROMPT
             if self.config.memory:
@@ -202,7 +204,10 @@ class CodingAgent:
                 "resumed": bool(self.config.resume_session),
             },
         )
-        self.ui.user_message(task)
+        if resumed:
+            self.ui.session_history(self.messages)
+        else:
+            self.ui.user_message(task)
 
     def _loop(self) -> AgentRun:
         if self.session is None:

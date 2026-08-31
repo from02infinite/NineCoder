@@ -7,6 +7,7 @@ from ninecoder.agent import AgentConfig, CodingAgent
 from ninecoder.model_client import ModelResponse, ToolCall
 from ninecoder.permissions import PermissionMode
 from ninecoder.session import SessionState, SessionStore, build_session_tree
+from ninecoder.ui.base import AgentUI
 from ninecoder.workspace import Workspace
 
 
@@ -44,6 +45,19 @@ class RecordingFinishModel:
             str(message.get("content", "")) for message in messages if message["role"] == "user"
         ]
         return ModelResponse("done", [ToolCall("call_1", "finish", {"summary": "ok"})])
+
+
+class RecordingUI(AgentUI):
+    def __init__(self) -> None:
+        super().__init__()
+        self.histories: list[list[dict[str, Any]]] = []
+        self.user_messages: list[str] = []
+
+    def session_history(self, messages: list[dict[str, Any]]) -> None:
+        self.histories.append(messages)
+
+    def user_message(self, text: str) -> None:
+        self.user_messages.append(text)
 
 
 class SubagentTaskModel:
@@ -154,6 +168,40 @@ class SessionTest(unittest.TestCase):
                 message["content"] for message in state.messages if message["role"] == "user"
             ]
             self.assertIn("second turn", user_messages)
+
+    def test_agent_displays_history_when_resuming_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = SessionStore(root / "runs" / "sessions")
+            store.create(
+                "resume task",
+                tmp,
+                PermissionMode.AUTO.value,
+                [
+                    {"role": "system", "content": "system"},
+                    {"role": "user", "content": "first turn"},
+                    {"role": "assistant", "content": "first answer"},
+                ],
+                session_id="saved-session",
+            )
+            ui = RecordingUI()
+
+            CodingAgent(
+                FinishModel(),
+                Workspace(root),
+                AgentConfig(
+                    max_steps=1,
+                    permission_mode=PermissionMode.AUTO,
+                    resume_session="saved-session",
+                    memory=False,
+                ),
+                ui=ui,
+            ).run("")
+
+            self.assertEqual(len(ui.histories), 1)
+            self.assertEqual(ui.histories[0][1]["content"], "first turn")
+            self.assertEqual(ui.histories[0][2]["content"], "first answer")
+            self.assertEqual(ui.user_messages, [])
 
     def test_agent_persists_subagent_tasks_in_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

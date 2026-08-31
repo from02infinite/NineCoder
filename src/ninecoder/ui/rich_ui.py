@@ -112,6 +112,33 @@ class RichUI(AgentUI):
         # Reserved: future streaming support will append to the same block.
         self.console.print(chunk, end="", markup=False)
 
+    def session_history(self, messages: list[dict[str, Any]]) -> None:
+        visible = _visible_history(messages)
+        if not visible:
+            return
+        self.console.print(Rule("Session history", style="dim"))
+        for message in visible:
+            role = str(message.get("role", ""))
+            content = str(message.get("content", "") or "")
+            if role == "user":
+                self.console.print(Panel(content, title="You", border_style="cyan", padding=(0, 1)))
+            elif role == "assistant":
+                if content.strip():
+                    self.console.print(Markdown(content))
+                tool_calls = message.get("tool_calls") or []
+                if tool_calls:
+                    names = [
+                        str(call.get("function", {}).get("name", "tool"))
+                        for call in tool_calls
+                        if isinstance(call, dict)
+                    ]
+                    self.console.print(Text(f"Tool calls: {', '.join(names)}", style="dim"))
+            elif role == "tool":
+                name = str(message.get("name", "tool"))
+                first = _first_line(content)
+                self.console.print(Text(f"{name}: {first}", style="dim"))
+        self.console.print(Rule(style="dim"))
+
     # -- model -------------------------------------------------------------
     def model_started(self) -> None:
         return None
@@ -228,3 +255,12 @@ def _session_label(session: Any, head_id: str) -> str:
         task = f"{task[:49]}..."
     marker = "* " if session_id == head_id else ""
     return f"{marker}{session_id}  {status:8}  {task}"
+
+
+def _visible_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [message for message in messages if message.get("role") != "system"]
+
+
+def _first_line(text: str, limit: int = 100) -> str:
+    first = (text.strip().splitlines() or [""])[0]
+    return first if len(first) <= limit else f"{first[: limit - 3]}..."
