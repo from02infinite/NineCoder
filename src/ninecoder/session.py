@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ninecoder.persistence import atomic_write_text
+
 
 def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -87,12 +89,11 @@ class SessionStore:
     def save(self, state: SessionState) -> Path:
         state.updated_at = now_iso()
         path = self.path_for(state.id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        return atomic_write_text(
+            path,
             json.dumps(asdict(state), ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        return path
 
 
 def build_session_tree(

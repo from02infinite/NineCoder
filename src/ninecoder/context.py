@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from ninecoder.persistence import atomic_write_text
+
 
 MAX_TOOL_CHARS = 8000
 TOOL_INLINE_CHARS = 2400
@@ -73,7 +75,7 @@ class ContextManager:
             return StoredToolOutput(content)
         path = self.root / "tool-results" / f"{_safe_name(tool_call_id)}-{_safe_name(tool_name)}.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        atomic_write_text(path, content, encoding="utf-8")
         rel_path = path.relative_to(self.workspace_root)
         preview = _head_tail(content, TOOL_INLINE_CHARS)
         return StoredToolOutput(
@@ -104,7 +106,7 @@ class ContextManager:
         tail = flatten_groups(groups[tail_start:])
         summary_text = self._summarize(omitted)
         summary_path = self.root / "summary.md"
-        summary_path.write_text(summary_text + "\n", encoding="utf-8")
+        atomic_write_text(summary_path, summary_text + "\n", encoding="utf-8")
         rel_path = summary_path.relative_to(self.workspace_root)
         summary = {
             "role": "user",

@@ -2,10 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from ninecoder.agent import AgentConfig, CodingAgent
 from ninecoder.model_client import ModelResponse, ToolCall
 from ninecoder.permissions import PermissionMode
+from ninecoder.persistence import atomic_write_text
 from ninecoder.session import SessionState, SessionStore, build_session_tree
 from ninecoder.ui.base import AgentUI
 from ninecoder.workspace import Workspace
@@ -266,6 +268,20 @@ class SessionTreeTest(unittest.TestCase):
         roots, children = build_session_tree([orphan])
         self.assertEqual(roots, ["orphan"])
         self.assertEqual(children, {})
+
+
+class AtomicWriteTest(unittest.TestCase):
+    def test_atomic_write_keeps_old_file_if_replace_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text("old", encoding="utf-8")
+
+            with patch("ninecoder.persistence.os.replace", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    atomic_write_text(path, "new")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "old")
+            self.assertEqual(list(path.parent.glob(".state.json.*.tmp")), [])
 
 
 if __name__ == "__main__":
