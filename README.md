@@ -1,20 +1,20 @@
 # NineCoder
 
-NineCoder is a lightweight coding agent implemented from scratch. It talks to an
-OpenAI-compatible model, exposes local tools, executes them in a bounded loop,
-and records every step as JSONL.
+NineCoder 是一个从零实现的轻量级 coding agent。它会与兼容 OpenAI
+接口的模型对话，暴露本地工具，在有边界的循环中执行工具，并将每一步记录为
+JSONL。
 
-Default model: `deepseek-v4-flash`.
+默认模型：`deepseek-v4-flash`。
 
-## Quick Start
+## 快速开始
 
 ```bash
 export DEEPSEEK_API_KEY="..."
 python -m pip install -e .
-ninecoder --workspace demo_workspace "Fix the bug and run tests"
+ninecoder --workspace demo_workspace "修复 bug 并运行测试"
 ```
 
-Create a demo workspace:
+创建演示工作区：
 
 ```bash
 python scripts/create_demo_workspace.py
@@ -22,83 +22,79 @@ ninecoder \
   --permission auto \
   --workspace demo_workspace \
   --test "python -m unittest -q" \
-  "Make divide raise ValueError('division by zero') when b is zero, then run tests"
+  "当 b 为零时，让 divide 抛出 ValueError('division by zero')，然后运行测试"
 ```
 
-Resume an unfinished run:
+继续一个未完成的运行：
 
 ```bash
 ninecoder --workspace demo_workspace --resume 20260831-120000-000000
 ```
 
-In the interactive REPL, choose an old session and continue it:
+在交互式 REPL 中选择旧会话并继续：
 
 ```text
 /resume
 ```
 
-Rich TUI mode opens a keyboard picker: use Up/Down to choose a saved session,
-then press Enter. Use `/resume <id>` to jump directly, or `/switch <id>` when
-you want to branch a new session from old context instead of continuing it.
+Rich TUI 模式会打开一个键盘选择器：使用 Up/Down 选择已保存的会话，然后按
+Enter。使用 `/resume <id>` 可以直接跳转；如果想从旧上下文分叉出一个新会话，
+而不是继续原会话，可以使用 `/switch <id>`。
 
-Print a script-friendly final report:
+输出便于脚本处理的最终报告：
 
 ```bash
-ninecoder --json --workspace demo_workspace "Fix the bug and run tests"
+ninecoder --json --workspace demo_workspace "修复 bug 并运行测试"
 ```
 
-Run local tests:
+运行本地测试：
 
 ```bash
 PYTHONPATH=src python -m unittest discover -s tests
 ```
 
-Useful environment variables:
+常用环境变量：
 
-- `DEEPSEEK_API_KEY` or `NINECODER_API_KEY`
-- `NINECODER_BASE_URL` or `DEEPSEEK_BASE_URL`
+- `DEEPSEEK_API_KEY` 或 `NINECODER_API_KEY`
+- `NINECODER_BASE_URL` 或 `DEEPSEEK_BASE_URL`
 - `NINECODER_MODEL`
-- `NINECODER_MAX_RETRIES` (transient model-error retries, default `3`)
-- `NINECODER_SANDBOX` (sandbox backend, default `auto`)
-- `NINECODER_STREAM` (`0` disables streaming model output)
+- `NINECODER_MAX_RETRIES`（临时模型错误的重试次数，默认 `3`）
+- `NINECODER_SANDBOX`（沙箱后端，默认 `auto`）
+- `NINECODER_STREAM`（设为 `0` 可关闭模型输出流式显示）
 
-## Safety
+## 安全性
 
-NineCoder never stores API keys. File writes are restricted to the selected
-workspace, sensitive paths (`.env*`, SSH/AWS/GCP keys and directories) are
-denied, shell commands have timeouts, and permission mode can be `plan`, `ask`,
-or `auto`.
+NineCoder 不会存储 API key。文件写入被限制在所选工作区内，敏感路径
+（`.env*`、SSH/AWS/GCP 密钥和目录）会被拒绝访问，shell 命令有超时限制，
+权限模式可以设置为 `plan`、`ask` 或 `auto`。
 
-`run_shell` runs inside an OS sandbox by default (`--sandbox auto`): it auto-
-detects `bwrap` (Linux, full-strength) or `sandbox-exec` (macOS, deprecated and
-best-effort), and falls back to no sandbox with a banner note when neither is
-installed. The sandbox makes the filesystem read-only except the workspace and
-`/tmp`, gives the command fresh namespaces, and **blocks network access by
-default** — pass `--allow-network` for commands that need it (e.g. `pip install`,
-`git clone`). Explicit backends are `--sandbox bwrap` / `--sandbox sandbox-exec`;
-`--sandbox off` disables it entirely.
+`run_shell` 默认在操作系统沙箱中运行（`--sandbox auto`）：它会自动检测
+`bwrap`（Linux，隔离能力完整）或 `sandbox-exec`（macOS，已废弃且仅尽力而为），
+如果两者都未安装，则会回退到无沙箱模式并显示提示。沙箱会让工作区和 `/tmp`
+之外的文件系统只读，为命令提供新的命名空间，并且**默认阻止网络访问**。需要
+联网的命令（例如 `pip install`、`git clone`）可以传入 `--allow-network`。
+显式后端包括 `--sandbox bwrap` 和 `--sandbox sandbox-exec`；`--sandbox off`
+会完全关闭沙箱。
 
-The sandbox is filesystem + process + network isolation, not a full secret
-container: a sandboxed command can still *read* `~/.ssh` and friends (it just
-cannot send the content out while network is blocked), and `sandbox-exec` is a
-deprecated Apple shim whose profile semantics are weaker than bubblewrap. The
-sensitive-path denial and `--permission ask` remain the defense for read access.
-When the model handles untrusted input, prefer `--permission ask` on top of the
-sandbox.
+沙箱提供的是文件系统、进程和网络隔离，并不是完整的密钥保险箱：沙箱中的命令
+仍然可以*读取* `~/.ssh` 等路径（只是在网络被阻止时无法把内容发送出去），而
+`sandbox-exec` 是 Apple 已废弃的兼容层，它的 profile 语义弱于 bubblewrap。
+敏感路径拒绝策略和 `--permission ask` 仍然是读取访问的防线。当模型处理不可信
+输入时，建议在沙箱之外再使用 `--permission ask`。
 
-## Implemented Agent Features
+## 已实现的 Agent 功能
 
-- One self-written agent loop
-- Tool registry with JSON schema definitions
-- Tools: bash, read, write, edit, glob/list, grep/search, todo, finish
-- On-demand markdown skill loading
-- Read-only subagent tasks with ids, status, independent context, and saved results
-- Simple task graph with dependencies
-- Resumable session state with messages, todos, task graph, subagent tasks, and status
-- Context compaction by recent-window retention, summary files, and stored long tool outputs
-- JSONL trajectory persistence
-- MCP-like local capability router with `tools/list` and `tools/call`
-- Hook points that can inspect or rewrite agent startup, model requests, model responses, tool calls, tool results, and stop events; tool hooks can also block execution with a synthetic result
-- Permission governance with `plan`, `ask`, and `auto`
-- Pluggable OS sandbox for `run_shell` (bubblewrap / sandbox-exec), network-blocked by default
-- Streaming model output (SSE), tokens rendered as they arrive in plain mode (`--no-stream` to disable)
+- 自写的 agent 循环
+- 带 JSON schema 定义的工具注册表
+- 工具：bash、read、write、edit、glob/list、grep/search、todo、finish
+- 按需加载 Markdown skill
+- 只读子 agent 任务，支持 id、状态、独立上下文和已保存结果
+- 简单的带依赖任务图
+- 可恢复的会话状态，包含消息、todos、任务图、子 agent 任务和状态
+- 通过近期窗口保留、摘要文件和长工具输出存储实现上下文压缩
+- JSONL 轨迹持久化
+- 类 MCP 的本地能力路由，支持 `tools/list` 和 `tools/call`
+- Hook 扩展点，可检查或改写 agent 启动、模型请求、模型响应、工具调用、工具结果和停止事件；工具 hook 也可以阻断执行并返回合成结果
+- `plan`、`ask` 和 `auto` 权限治理
+- `run_shell` 可插拔操作系统沙箱（bubblewrap / sandbox-exec），默认阻止网络访问
+- 模型输出流式显示（SSE），plain 模式会实时渲染 token（可用 `--no-stream` 关闭）
