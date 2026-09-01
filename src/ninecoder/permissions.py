@@ -17,6 +17,14 @@ class Decision(str, Enum):
     DENY = "deny"
 
 
+class GrantDecision(str, Enum):
+    """How the user wants to grant an interactive ``ask`` request."""
+
+    ALLOW_ONCE = "allow_once"
+    ALLOW_ALWAYS = "allow_always"
+    DENY = "deny"
+
+
 READ_ONLY_TOOLS = {
     "list_files",
     "read_file",

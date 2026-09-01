@@ -13,6 +13,8 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
+from ninecoder.permissions import GrantDecision
+
 
 @dataclass(frozen=True)
 class UiContext:
@@ -79,19 +81,23 @@ class AgentUI:
         """A tool call returned an error result."""
 
     # -- permission --------------------------------------------------------
-    def permission_requested(self, name: str, arguments: dict[str, Any], reason: str) -> bool:
-        """Ask the user whether to allow a mutating tool call.
+    def permission_requested(self, name: str, arguments: dict[str, Any], reason: str) -> GrantDecision:
+        """Ask the user how to grant a mutating tool call.
 
-        Returns True to allow, False to deny. The default implementation is a
-        plain terminal prompt, matching the pre-UI behavior.
+        Returns one of :class:`~ninecoder.permissions.GrantDecision`. The
+        default implementation is a plain terminal prompt.
         """
         print(f"\nPermission required: {name} ({reason})")
         print(json.dumps(arguments, ensure_ascii=False, indent=2))
         try:
-            reply = input("Allow once? [y/N] ").strip().lower()
+            reply = input("Allow? [y=once / a=always / N=deny] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
-            return False
-        return reply in {"y", "yes"}
+            reply = ""
+        if reply in {"a", "always"}:
+            return GrantDecision.ALLOW_ALWAYS
+        if reply in {"y", "yes"}:
+            return GrantDecision.ALLOW_ONCE
+        return GrantDecision.DENY
 
     # -- diagnostics -------------------------------------------------------
     def debug(self, message: str) -> None:
@@ -147,8 +153,8 @@ class NullUI(AgentUI):
     ``--permission plan`` for unattended runs.
     """
 
-    def permission_requested(self, name: str, arguments: dict[str, Any], reason: str) -> bool:
-        return False
+    def permission_requested(self, name: str, arguments: dict[str, Any], reason: str) -> GrantDecision:
+        return GrantDecision.DENY
 
     def prompt_input(self) -> None:
         return None

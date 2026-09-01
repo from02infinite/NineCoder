@@ -9,6 +9,7 @@ import json
 import sys
 from typing import Any, TextIO
 
+from ninecoder.permissions import GrantDecision
 from ninecoder.ui.base import AgentUI, UiContext
 from ninecoder.ui.components import (
     format_args,
@@ -120,14 +121,18 @@ class PlainUI(AgentUI):
         for line in message.strip().splitlines()[:6]:
             self._emit(f"      {line}")
 
-    def permission_requested(self, name: str, arguments: dict[str, Any], reason: str) -> bool:
+    def permission_requested(self, name: str, arguments: dict[str, Any], reason: str) -> GrantDecision:
         self._emit(f"Permission required: {name} ({reason})")
         self._emit(json.dumps(arguments, ensure_ascii=False, indent=2))
         try:
-            reply = input("Allow once? [y/N] ").strip().lower()
+            reply = input("Allow? [y=once / a=always / N=deny] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
-            return False
-        return reply in {"y", "yes"}
+            reply = ""
+        if reply in {"a", "always"}:
+            return GrantDecision.ALLOW_ALWAYS
+        if reply in {"y", "yes"}:
+            return GrantDecision.ALLOW_ONCE
+        return GrantDecision.DENY
 
     def debug(self, message: str) -> None:
         if self._debug:

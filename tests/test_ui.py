@@ -6,6 +6,7 @@ from typing import Any
 from rich.markdown import Markdown
 from rich.text import Text
 
+from ninecoder.permissions import GrantDecision
 from ninecoder.tools import ToolResult
 from ninecoder.ui import NullUI, PlainUI, UiContext, make_ui
 from ninecoder.ui.rich_ui import _in_unclosed_fence, _render_streaming
@@ -128,7 +129,10 @@ class UiFactoryTest(unittest.TestCase):
 
     def test_null_ui_denies_permission(self) -> None:
         ui = NullUI()
-        self.assertFalse(ui.permission_requested("run_shell", {"command": "rm"}, "changes state"))
+        self.assertEqual(
+            ui.permission_requested("run_shell", {"command": "rm"}, "changes state"),
+            GrantDecision.DENY,
+        )
 
 
 class PlainUITest(unittest.TestCase):

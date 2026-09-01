@@ -24,6 +24,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
 
+from ninecoder.permissions import GrantDecision
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
@@ -207,19 +208,23 @@ class RichUI(AgentUI):
         self.console.print(line)
 
     # -- permission --------------------------------------------------------
-    def permission_requested(self, name: str, arguments: dict[str, Any], reason: str) -> bool:
+    def permission_requested(self, name: str, arguments: dict[str, Any], reason: str) -> GrantDecision:
         body = Text(permission_summary(name, arguments))
         body.append("\n\n")
         body.append(reason, style="yellow")
         self.console.print(
             Panel(body, title="Permission required", border_style="yellow", padding=(0, 1))
         )
-        self.console.print("Allow once? [y/N] ", end="", markup=False)
+        self.console.print("Allow? [y=once / a=always / N=deny] ", end="", markup=False)
         try:
             reply = sys.stdin.readline().strip().lower()
         except (EOFError, KeyboardInterrupt):
             reply = ""
-        return reply in {"y", "yes"}
+        if reply in {"a", "always"}:
+            return GrantDecision.ALLOW_ALWAYS
+        if reply in {"y", "yes"}:
+            return GrantDecision.ALLOW_ONCE
+        return GrantDecision.DENY
 
     # -- diagnostics -------------------------------------------------------
     def debug(self, message: str) -> None:

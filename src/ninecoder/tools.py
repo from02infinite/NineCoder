@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 
 from ninecoder.errors import PermissionDenied
-from ninecoder.permissions import Decision, PermissionMode, evaluate_permission
+from ninecoder.permissions import Decision, GrantDecision, PermissionMode, evaluate_permission
 from ninecoder.skills import SkillLibrary
 from ninecoder.subagents import SubagentTaskRunner
 from ninecoder.workspace import Workspace
@@ -60,6 +60,7 @@ class ToolRegistry:
         self.subagent_runner = SubagentTaskRunner(model) if model is not None else None
         self.todos: list[dict[str, str]] = []
         self.task_graph: list[dict[str, Any]] = []
+        self.grants: set[str] = set()
         self._tools: dict[str, Tool] = {}
         self._register_builtin_tools()
 
@@ -87,7 +88,7 @@ class ToolRegistry:
         )
         if permission.decision is Decision.DENY:
             return ToolResult(f"Permission denied: {permission.reason}", is_error=True)
-        if permission.decision is Decision.ASK and not self._confirm(name, arguments, permission.reason):
+        if permission.decision is Decision.ASK and not self._approved(name, arguments, permission.reason):
             return ToolResult(f"Permission denied by user: {permission.reason}", is_error=True)
         try:
             return tool.handler(arguments)
@@ -428,8 +429,36 @@ class ToolRegistry:
                 return value
         return ""
 
-    def _confirm(self, name: str, arguments: dict[str, Any], reason: str) -> bool:
+    def _confirm(self, name: str, arguments: dict[str, Any], reason: str) -> GrantDecision:
         return self.ui.permission_requested(name, arguments, reason)
+
+    def _approved(self, name: str, arguments: dict[str, Any], reason: str) -> bool:
+        """Resolve an interactive ``ask`` decision, honoring remembered grants.
+
+        A prior "always allow" for a similar operation (same tool + command
+        prefix, or same tool + target path) short-circuits the prompt. A new
+        "always allow" answer is remembered for the rest of the session.
+        """
+        key = self._grant_key(name, arguments)
+        if key in self.grants:
+            return True
+        decision = self._confirm(name, arguments, reason)
+        if decision is GrantDecision.ALLOW_ALWAYS:
+            self.grants.add(key)
+            return True
+        return decision is GrantDecision.ALLOW_ONCE
+
+    def _grant_key(self, name: str, arguments: dict[str, Any]) -> str:
+        """Compute the "similar operations" key used to remember a grant.
+
+        ``run_shell`` grants key on the exact command line, so "always allow"
+        only covers repeat invocations of that same command. File tools key on
+        the target path.
+        """
+        if name == "run_shell":
+            command = str(arguments.get("command", "")).strip()
+            return f"{name}:{command}"
+        return f"{name}:{self._target_argument(arguments)}"
 
 
 def string(description: str, default: str | None = None) -> dict[str, Any]:

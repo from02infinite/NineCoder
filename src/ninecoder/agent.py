@@ -152,6 +152,7 @@ class CodingAgent:
         )
         self.tools.todos = []
         self.tools.task_graph = []
+        self.tools.grants = set()
         if self.tools.subagent_runner is not None:
             self.tools.subagent_runner = SubagentTaskRunner(self.model)
         self.context_manager = ContextManager(
