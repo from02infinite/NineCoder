@@ -37,3 +37,21 @@ Nothing worth remembering.
 ## 2026-08-31 22:02 — 请你输出一段文本，关于番茄炒鸡蛋的做法
 
 - 请你输出一段文本，关于番茄炒鸡蛋的做法: 已完成任务：输出了一段关于"番茄炒鸡蛋"做法的中文文本。内容涵盖食材准备（番茄、鸡蛋、小葱、盐、糖、油）、五步做法（处理番茄去皮切块、打蛋液加盐加水、先炒鸡蛋定型盛出、炒番茄压汁出沙加糖盐调味、合炒裹汁撒葱花出锅）以及小贴士（鸡蛋先炒后盛更嫩滑、番茄炒出沙更入味、加糖平衡酸味提鲜）。属于纯文本生成任务，无需改动工作区文件。
+## 2026-09-01 21:48 — 你好，请你为我推荐一首关于天空的歌
+
+Nothing worth remembering.
+## 2026-09-01 21:49 — 你好，这是我跟你说的第几句话？
+
+- 用户使用中文交流，期望中文回复。
+
+请记住我叫张三，是一名java后端开发工程师。
+## 2026-09-02 15:24 — 你知道我的名字和职业吗？
+
+- User's name: 张三 (Zhang San)
+- User's profession: Java 后端开发工程师 (Java backend developer)
+- User expects assistant to recall personal details from prior conversation context, even for pure chat questions.
+## 2026-09-02 15:24 — 你知道我的名字和职业吗？
+
+- User's name: 张三 (Zhang San)
+- User's profession: Java 后端开发工程师 (Java backend developer)
+- This personal context was already established in prior session memory; preserve it across sessions.
